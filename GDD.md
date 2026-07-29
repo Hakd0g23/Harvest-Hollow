@@ -20,7 +20,11 @@ Both players act on the same shared world simultaneously — the server is the s
 - **No blocking griefing.** Any player can act on any tile — there's no lock/ownership system that lets one player wall the other out.
 
 ## Players & Session
-- Exactly 2 players per farm (room), invite-link based, no matchmaking for v1.
+- Solo-primary: one player can fully play the farm alone. Up to 6 players
+  total can join the same farm (room) as optional helpers, invite-link
+  based, no matchmaking for v1. (Revised 2026-07-30 — originally scoped as
+  exactly 2 required; the actual intent is solo-first with room for a
+  small group to help, not a fixed 2-player requirement.)
 - Sessions are persistent-ish: the farm state should survive a disconnect/reconnect (server holds authoritative state), not reset on refresh.
 
 ## Content Scope (v1 / MVP)
@@ -30,7 +34,7 @@ Both players act on the same shared world simultaneously — the server is the s
 - Farm animals (Quaternius Farm Animal Pack) as a stretch goal post-MVP — decorative first, produce-generating later.
 
 ## Explicitly Out of Scope (v1)
-- More than 2 players.
+- More than 6 players per farm.
 - Combat, NPCs, quests, story.
 - Seasons/weather/day-night cycle.
 - Native mobile apps (browser-only, no App/Play Store build).
@@ -38,7 +42,7 @@ Both players act on the same shared world simultaneously — the server is the s
 ## Visual Style
 Low-poly, stylized — matching the Quaternius asset aesthetic used across Cube Blast. Bright, cozy color palette.
 
-## Open Questions (for you to weigh in on)
-- Growth timer length: real minutes (idle-friendly, session can be short) vs. much faster for tight play sessions?
-- Grid size for MVP — 6x6, or larger?
-- Should there be any solo-play fallback (1 player controls both roles), or is this strictly co-op-only?
+## Resolved Questions (2026-07-30)
+- Growth timer: 75s watered-to-grown, with a 45s unwatered-wilt mechanic. Real-time coordination pacing, not idle-minutes.
+- Grid size: 6x6, kept — legible at a glance with a fixed camera.
+- Solo/co-op: solo-primary with up to 6 optional helper players (see Players & Session above).

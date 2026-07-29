@@ -379,28 +379,31 @@ socket.on('connect', () => {
 socket.on('disconnect', () => {
   statusEl.textContent = 'disconnected';
 });
+let maxPlayers = 6; // overwritten by roomState; fallback matches server default
+
 socket.on('roomFull', () => {
-  statusEl.textContent = 'room full (max 2 players)';
+  statusEl.textContent = `room full (max ${maxPlayers} players)`;
 });
 
 socket.on('roomState', (room) => {
   buildGrid(room.gridSize);
   room.tiles.forEach(applyTile);
-  statusEl.textContent = `connected — ${room.players.length}/2 players`;
+  maxPlayers = room.maxPlayers;
+  statusEl.textContent = `connected — ${room.players.length}/${maxPlayers} players`;
   addStaticProps(); // no-op after first call
 });
 
 socket.on('playerJoined', () => {
-  statusEl.textContent = statusEl.textContent.replace(/\d+\/2/, (s) => {
+  statusEl.textContent = statusEl.textContent.replace(/\d+\/\d+/, (s) => {
     const n = parseInt(s, 10);
-    return `${n + 1}/2`;
+    return `${n + 1}/${maxPlayers}`;
   });
 });
 
 socket.on('playerLeft', () => {
-  statusEl.textContent = statusEl.textContent.replace(/\d+\/2/, (s) => {
+  statusEl.textContent = statusEl.textContent.replace(/\d+\/\d+/, (s) => {
     const n = parseInt(s, 10);
-    return `${Math.max(0, n - 1)}/2`;
+    return `${Math.max(0, n - 1)}/${maxPlayers}`;
   });
 });
 

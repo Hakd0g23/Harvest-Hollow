@@ -1,8 +1,9 @@
 # Harvest Hollow (skeleton)
 
-Minimal real-time co-op farm-sim proof of concept: 2 players join a shared
-farm plot rendered in Three.js, synced via a Socket.io server that owns all
-tile state.
+Minimal real-time co-op farm-sim proof of concept: solo-primary, with up to
+6 players able to join the same shared farm plot as optional helpers,
+rendered in Three.js and synced via a Socket.io server that owns all tile
+state.
 
 Stack pattern reused from sibling projects in this workspace:
 - **Server**: plain Node.js + Express + Socket.io, room/broadcast pattern
@@ -28,7 +29,7 @@ empty --till--> tilled --plant--> planted --water--> watered --(timer)--> grown 
   "crop" meshes for planted/watered/grown stages. Real Quaternius models
   are a separate swap-in pass.
 
-## Running locally (two-player test)
+## Running locally (multiplayer test)
 
 Requires Node.js 18+.
 
@@ -37,9 +38,11 @@ npm run install:all   # installs server + client deps
 npm run dev            # runs server (:4000) and client (:5173) together
 ```
 
-Then open **two separate browser tabs** at `http://localhost:5173` to
-simulate two co-op players. Each tab is a distinct socket connection /
-player slot (max 2 per room in this skeleton).
+Then open **separate browser tabs** at `http://localhost:5173` to simulate
+multiple players on the same farm. Each tab is a distinct socket
+connection / player slot (max 6 per room). The first tab to load generates
+a room code and stamps it into the URL (`?room=xyz`) — open that same URL
+in the other tabs to join the same farm instead of starting a new one.
 
 Run server/client individually if you prefer two terminals:
 
@@ -50,7 +53,15 @@ npm run dev:client   # http://localhost:5173
 
 No deployment (Netlify/Render) is set up yet — this is local-only for now,
 matching LuckyLanes' and Cube Blast's deployed shape once this skeleton is
-validated in a real two-tab session.
+validated in a real multiplayer session.
+
+## Saving
+
+Each farm (room) is saved to `server/data/rooms/<roomCode>.json` on every
+tile change and reloaded automatically the next time that room code is
+requested — including after a server restart. There's no separate "save"
+action: the room's owner (whoever created the farm) resumes progress just
+by revisiting the same invite-link URL. `server/data/` is gitignored.
 
 ## Design decisions (reviewed 2026-07-30)
 

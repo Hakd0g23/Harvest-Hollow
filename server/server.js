@@ -3,17 +3,61 @@
 // tile state and validates every action. Clients are dumb renderers.
 
 import http from 'http';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import cors from 'cors';
 import { Server } from 'socket.io';
 
 const PORT = process.env.PORT || 4000;
 
+// Farm saves: the room's owner (whoever created it) should be able to
+// close the tab, come back later — even after a server restart — and pick
+// up where they left off. Persisted as one JSON file per room, keyed by
+// the same room code already in the invite-link URL, so "saveable" needs
+// no new player-facing concept: revisiting the URL IS resuming the save.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SAVE_DIR = path.join(__dirname, 'data', 'rooms');
+fs.mkdirSync(SAVE_DIR, { recursive: true });
+
+function savePath(roomId) {
+  return path.join(SAVE_DIR, `${roomId}.json`);
+}
+
+function loadTiles(roomId) {
+  try {
+    const raw = fs.readFileSync(savePath(roomId), 'utf-8');
+    const saved = JSON.parse(raw);
+    if (Array.isArray(saved.tiles) && saved.tiles.length === GRID_SIZE * GRID_SIZE) {
+      return saved.tiles;
+    }
+  } catch {
+    // no save yet, or unreadable/stale — fall through to a fresh grid
+  }
+  return null;
+}
+
+// Fire-and-forget write, coalesced per room so a burst of actions/growth
+// ticks doesn't queue up redundant disk writes.
+const pendingSaves = new Set();
+function saveRoomSoon(room) {
+  if (pendingSaves.has(room.id)) return;
+  pendingSaves.add(room.id);
+  setImmediate(() => {
+    pendingSaves.delete(room.id);
+    const payload = JSON.stringify({ tiles: room.tiles, savedAt: Date.now() });
+    fs.writeFile(savePath(room.id), payload, (err) => {
+      if (err) console.error(`[save] failed for room ${room.id}:`, err.message);
+    });
+  });
+}
+
 // Shared plot, per the GDD's "division of labor, not division of space"
 // co-op pillar — any player can till/plant/water/harvest any tile, both
 // see the same grid. Not an open question; settled by the GDD.
 const DEFAULT_ROOM_ID = 'farm-1';
-const MAX_PLAYERS = 2;
+const MAX_PLAYERS = 6; // solo-primary; up to 6 helpers can join the same farm
 const GRID_SIZE = 6;
 
 // Growth timing: real-time co-op pressure, not idle-game pacing (per GDD's
@@ -55,10 +99,13 @@ const ACTION_VERB_PAST = {
 };
 
 function createRoom(id) {
-  const tiles = [];
-  for (let y = 0; y < GRID_SIZE; y++) {
-    for (let x = 0; x < GRID_SIZE; x++) {
-      tiles.push(createTile(x, y));
+  const savedTiles = loadTiles(id);
+  const tiles = savedTiles ?? [];
+  if (!savedTiles) {
+    for (let y = 0; y < GRID_SIZE; y++) {
+      for (let x = 0; x < GRID_SIZE; x++) {
+        tiles.push(createTile(x, y));
+      }
     }
   }
   return {
@@ -86,6 +133,7 @@ function publicRoomState(room) {
   return {
     id: room.id,
     gridSize: GRID_SIZE,
+    maxPlayers: MAX_PLAYERS,
     players: [...room.players.values()],
     tiles: room.tiles,
   };
@@ -181,6 +229,7 @@ function growthTick(io) {
     }
     if (changed.length) {
       io.to(room.id).emit('tilesUpdated', changed);
+      saveRoomSoon(room);
     }
   }
 }
@@ -230,6 +279,7 @@ io.on('connection', (socket) => {
       return tileError(room, socket, result.message, result.tile, action.type);
     }
     io.to(room.id).emit('tilesUpdated', [result.tile]);
+    saveRoomSoon(room);
   });
 
   socket.on('disconnect', () => {
