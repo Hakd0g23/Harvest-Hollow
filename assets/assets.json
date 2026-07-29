@@ -1,0 +1,25 @@
+{
+  "_comment": "Logical name -> OBJ/MTL file paths, relative to this assets.json's own folder (assets/). Client resolves these through assetManifest.js rather than hardcoding paths, so swapping models later (e.g. adding real cropType-specific stages, glTF conversions) doesn't require touching main.js.",
+
+  "wheat_planted": {
+    "obj": "ultimate-crops-pack/OBJ/Wheat_Crop.obj",
+    "mtl": "ultimate-crops-pack/OBJ/Wheat_Crop.mtl"
+  },
+  "wheat_watered": {
+    "obj": "ultimate-crops-pack/OBJ/Wheat_2.obj",
+    "mtl": "ultimate-crops-pack/OBJ/Wheat_2.mtl"
+  },
+  "wheat_grown": {
+    "obj": "ultimate-crops-pack/OBJ/Wheat_4.obj",
+    "mtl": "ultimate-crops-pack/OBJ/Wheat_4.mtl"
+  },
+
+  "barn": {
+    "obj": "farm-buildings-pack/OBJ/Barn.obj",
+    "mtl": "farm-buildings-pack/OBJ/Barn.mtl"
+  },
+  "fence": {
+    "obj": "farm-buildings-pack/OBJ/Fence.obj",
+    "mtl": "farm-buildings-pack/OBJ/Fence.mtl"
+  }
+}

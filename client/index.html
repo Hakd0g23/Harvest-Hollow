@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Harvest Hollow (skeleton)</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #1b1f16;
+    color: #eee;
+    font-family: system-ui, sans-serif;
+    overflow: hidden;
+  }
+  #hud {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    z-index: 10;
+    background: rgba(0, 0, 0, 0.35);
+  }
+  #hud h1 {
+    font-size: 15px;
+    margin: 0 12px 0 0;
+    font-weight: 600;
+    color: #d7f5b0;
+  }
+  .tool-btn {
+    background: #2c3320;
+    border: 1px solid #4a5636;
+    color: #eee;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    /* Touch target floor even on desktop; grown further in the narrow-viewport rule below. */
+    min-height: 32px;
+    touch-action: manipulation;
+  }
+  .tool-btn.active {
+    background: #6fae2e;
+    border-color: #9be356;
+    color: #10190a;
+    font-weight: 600;
+  }
+  #status {
+    margin-left: auto;
+    font-size: 12px;
+    color: #b8c9a0;
+  }
+  #canvas-wrap {
+    position: absolute;
+    inset: 0;
+  }
+  #toast {
+    position: absolute;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(200, 60, 40, 0.9);
+    color: white;
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    display: none;
+    z-index: 10;
+  }
+
+  /* Narrow / phone-sized viewport: HUD stacks, buttons get real 44px+ tap
+     targets (Apple/WCAG touch-target guidance), canvas gets breathing room
+     below the (now taller, possibly multi-line) HUD bar instead of overlap. */
+  @media (max-width: 600px) {
+    #hud {
+      padding: 8px 10px;
+      gap: 8px;
+    }
+    #hud h1 {
+      flex: 1 0 100%;
+      margin: 0 0 4px 0;
+    }
+    .tool-btn {
+      flex: 1 1 auto;
+      min-height: 44px;
+      min-width: 44px;
+      padding: 10px 8px;
+      font-size: 14px;
+    }
+    #status {
+      flex: 1 0 100%;
+      margin-left: 0;
+      text-align: right;
+    }
+  }
+</style>
+</head>
+<body>
+  <div id="hud">
+    <h1>Harvest Hollow</h1>
+    <button class="tool-btn active" data-tool="till">Till</button>
+    <button class="tool-btn" data-tool="plant">Plant</button>
+    <button class="tool-btn" data-tool="water">Water</button>
+    <button class="tool-btn" data-tool="harvest">Harvest</button>
+    <span id="status">connecting...</span>
+  </div>
+  <div id="canvas-wrap"></div>
+  <div id="toast"></div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.180.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.180.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
