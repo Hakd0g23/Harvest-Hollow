@@ -72,6 +72,13 @@
     display: none;
     z-index: 10;
   }
+  /* Same-tile collision ("someone beat you to it") reads as a coordination
+     moment, not an error — deliberately not red, and the icon + copy carry
+     the distinction too (not color alone), so it stays legible for
+     colorblind players. */
+  #toast.toast--collision {
+    background: rgba(60, 110, 150, 0.92);
+  }
 
   /* Narrow / phone-sized viewport: HUD stacks, buttons get real 44px+ tap
      targets (Apple/WCAG touch-target guidance), canvas gets breathing room

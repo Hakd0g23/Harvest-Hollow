@@ -9,34 +9,50 @@ import { Server } from 'socket.io';
 
 const PORT = process.env.PORT || 4000;
 
-// --- Design decision (flagged for user): fully-shared plot, single room ---
-// This skeleton hardcodes ONE room ("farm-1") that any connecting client
-// joins automatically, capacity 2. Tiles are NOT per-player — either player
-// can till/plant/water/harvest any tile, and both see the same grid. If you
-// want per-player plots or multiple concurrent rooms/lobby codes (like
-// LuckyLanes' room-code join flow), that's a bigger change to flag before
-// building further.
-const ROOM_ID = 'farm-1';
+// Shared plot, per the GDD's "division of labor, not division of space"
+// co-op pillar — any player can till/plant/water/harvest any tile, both
+// see the same grid. Not an open question; settled by the GDD.
+const DEFAULT_ROOM_ID = 'farm-1';
 const MAX_PLAYERS = 2;
 const GRID_SIZE = 6;
 
-// --- Design decision (flagged for user): growth timing ---
-// Tile must be tilled, planted, then watered before it starts growing.
-// GROWTH_MS is the time from "watered" to "grown", picked short (20s) so
-// the loop is testable in a live session. Real balance is a design call —
-// swap this constant once real growth-stage pacing is decided.
-const GROWTH_MS = 20_000;
+// Growth timing: real-time co-op pressure, not idle-game pacing (per GDD's
+// "who tills, who waters, who harvests" coordination pitch). 75s from
+// watered to grown; a planted-but-unwatered tile wilts (loses its seed,
+// reverts to tilled) after 45s so sloppy coordination has a real cost.
+const GROWTH_MS = 75_000;
+const WILT_MS = 45_000;
 const GROWTH_TICK_MS = 1000;
 
 // Tile lifecycle: empty -> tilled -> planted -> watered (growing) -> grown -> (harvest) -> tilled
+//                                       \-> (wilts if unwatered too long) -> tilled
 function createTile(x, y) {
   return {
     x,
     y,
     stage: 'empty', // empty | tilled | planted | watered | grown
+    plantedAt: null, // ms timestamp when planted; drives the wilt clock
     wateredAt: null, // ms timestamp when watering started growth clock
+    lastActionAt: null, // ms timestamp of the last *player-caused* stage change
+    lastActionBy: null, // socket.id of whoever caused it — lets a rejection
+                         // a moment later distinguish "someone else just beat
+                         // you to this tile" from a genuine stale-tool error
   };
 }
+
+// How recent a tile's last player-caused change has to be for a same-tile
+// rejection to read as a coordination collision rather than a plain user
+// error. Generous enough to cover realistic co-op latency + a beat of
+// hesitation, short enough that it never wrongly explains an actually-stale
+// action away as "someone beat you to it."
+const COLLISION_WINDOW_MS = 3000;
+
+const ACTION_VERB_PAST = {
+  till: 'tilled',
+  plant: 'planted',
+  water: 'watered',
+  harvest: 'harvested',
+};
 
 function createRoom(id) {
   const tiles = [];
@@ -52,8 +68,15 @@ function createRoom(id) {
   };
 }
 
+// Multiple concurrent rooms, created on demand from a client-supplied room
+// code (?room=xyz in the URL, per the GDD's invite-link join flow) instead
+// of one hardcoded shared room.
 const rooms = new Map();
-rooms.set(ROOM_ID, createRoom(ROOM_ID));
+
+function getOrCreateRoom(id) {
+  if (!rooms.has(id)) rooms.set(id, createRoom(id));
+  return rooms.get(id);
+}
 
 function getTile(room, x, y) {
   return room.tiles.find((t) => t.x === x && t.y === y);
@@ -68,45 +91,80 @@ function publicRoomState(room) {
   };
 }
 
-function tileError(socket, message) {
-  socket.emit('actionRejected', { message });
+// Emits a rejection. When `tile` is passed, checks whether the tile was
+// changed by a *different* player within COLLISION_WINDOW_MS — if so this
+// reads to the rejected player as "they got there first" rather than a
+// generic error, and carries enough info (x, y, other player's name) for
+// the client to say so and flash the specific tile.
+function tileError(room, socket, message, tile, actionType) {
+  let collision = false;
+  let actorName = null;
+  if (tile && tile.lastActionAt && tile.lastActionBy && tile.lastActionBy !== socket.id) {
+    if (Date.now() - tile.lastActionAt <= COLLISION_WINDOW_MS) {
+      collision = true;
+      actorName = room.players.get(tile.lastActionBy)?.name ?? 'Another farmer';
+    }
+  }
+  socket.emit('actionRejected', {
+    message,
+    collision,
+    actorName,
+    actionType,
+    verbPast: ACTION_VERB_PAST[actionType] ?? null,
+    x: tile?.x,
+    y: tile?.y,
+  });
 }
 
 // --- Action validation (server is source of truth) ---
-function applyAction(room, action) {
+function applyAction(room, action, playerId) {
   const { type, x, y } = action;
   const tile = getTile(room, x, y);
   if (!tile) return { ok: false, message: 'Tile out of bounds.' };
 
+  function reject(message) {
+    return { ok: false, message, tile };
+  }
+
+  function accept() {
+    tile.lastActionAt = Date.now();
+    tile.lastActionBy = playerId;
+    return { ok: true, tile };
+  }
+
   switch (type) {
     case 'till':
-      if (tile.stage !== 'empty') return { ok: false, message: 'Tile is not empty.' };
+      if (tile.stage !== 'empty') return reject('Tile is not empty.');
       tile.stage = 'tilled';
-      return { ok: true, tile };
+      return accept();
 
     case 'plant':
-      if (tile.stage !== 'tilled') return { ok: false, message: 'Tile must be tilled first.' };
+      if (tile.stage !== 'tilled') return reject('Tile must be tilled first.');
       tile.stage = 'planted';
-      return { ok: true, tile };
+      tile.plantedAt = Date.now();
+      return accept();
 
     case 'water':
-      if (tile.stage !== 'planted') return { ok: false, message: 'Nothing to water here.' };
+      if (tile.stage !== 'planted') return reject('Nothing to water here.');
       tile.stage = 'watered';
       tile.wateredAt = Date.now();
-      return { ok: true, tile };
+      return accept();
 
     case 'harvest':
-      if (tile.stage !== 'grown') return { ok: false, message: 'Not ready to harvest.' };
-      tile.stage = 'tilled'; // soil stays tilled, ready to replant (flagged design call)
+      if (tile.stage !== 'grown') return reject('Not ready to harvest.');
+      tile.stage = 'tilled'; // soil stays tilled, ready to replant
+      tile.plantedAt = null;
       tile.wateredAt = null;
-      return { ok: true, tile };
+      return accept();
 
     default:
       return { ok: false, message: `Unknown action type: ${type}` };
   }
 }
 
-// Growth tick: promote any "watered" tile whose timer has elapsed to "grown".
+// Growth tick: promote "watered" tiles past their timer to "grown", and
+// wilt "planted" tiles that sat unwatered too long back to "tilled" (loses
+// the seed) — the mechanism that gives coordination real stakes.
 function growthTick(io) {
   for (const room of rooms.values()) {
     const now = Date.now();
@@ -114,6 +172,10 @@ function growthTick(io) {
     for (const tile of room.tiles) {
       if (tile.stage === 'watered' && tile.wateredAt && now - tile.wateredAt >= GROWTH_MS) {
         tile.stage = 'grown';
+        changed.push(tile);
+      } else if (tile.stage === 'planted' && tile.plantedAt && now - tile.plantedAt >= WILT_MS) {
+        tile.stage = 'tilled';
+        tile.plantedAt = null;
         changed.push(tile);
       }
     }
@@ -132,8 +194,15 @@ const io = new Server(server, {
   cors: { origin: '*' },
 });
 
+function sanitizeRoomId(raw) {
+  if (typeof raw !== 'string') return DEFAULT_ROOM_ID;
+  const trimmed = raw.trim().slice(0, 32);
+  return /^[a-zA-Z0-9_-]+$/.test(trimmed) ? trimmed : DEFAULT_ROOM_ID;
+}
+
 io.on('connection', (socket) => {
-  const room = rooms.get(ROOM_ID);
+  const roomId = sanitizeRoomId(socket.handshake.query.room);
+  const room = getOrCreateRoom(roomId);
 
   if (room.players.size >= MAX_PLAYERS) {
     socket.emit('roomFull');
@@ -154,11 +223,11 @@ io.on('connection', (socket) => {
 
   socket.on('action', (action) => {
     if (!action || typeof action.x !== 'number' || typeof action.y !== 'number') {
-      return tileError(socket, 'Malformed action.');
+      return tileError(room, socket, 'Malformed action.');
     }
-    const result = applyAction(room, action);
+    const result = applyAction(room, action, socket.id);
     if (!result.ok) {
-      return tileError(socket, result.message);
+      return tileError(room, socket, result.message, result.tile, action.type);
     }
     io.to(room.id).emit('tilesUpdated', [result.tile]);
   });

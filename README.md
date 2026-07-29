@@ -52,38 +52,46 @@ No deployment (Netlify/Render) is set up yet — this is local-only for now,
 matching LuckyLanes' and Cube Blast's deployed shape once this skeleton is
 validated in a real two-tab session.
 
-## Design decisions made for this skeleton (flag for review)
+## Design decisions (reviewed 2026-07-30)
 
-These were judgment calls to get something runnable; revisit before this
-goes further:
+The skeleton's original judgment calls were reviewed against the GDD/TDD
+by the game-engineer agent. Two turned out to be settled by the GDD
+already (not actually open); the rest were genuine open questions and
+have been resolved or flagged to the right owner:
 
-1. **Fully shared plot, not per-player.** Either player can till/plant/
-   water/harvest *any* tile on one shared 6x6 grid — there's no ownership
-   or per-player sub-plot. If the intended design is "each player has their
-   own patch," that's a bigger data-model change (tiles need an `ownerId`,
-   and action validation needs to check it).
-2. **Single hardcoded room, no lobby/room-code join flow.** Unlike
-   LuckyLanes (which has a real room-code lobby), every client that
-   connects joins the same fixed room (`farm-1`), capacity 2, first-come
-   first-served. A 3rd connection is rejected with `roomFull`. If you want
-   multiple concurrent farms or a join-by-code flow, say so before more
-   gameplay gets built on top of the current single-room assumption.
-3. **Growth timer: 20 seconds from watering to grown.** Picked short so
-   the loop is testable live rather than for game-balance reasons — this
-   is very likely the wrong number for the actual design and should be
-   revisited (also: right now watering is required to start the growth
-   clock at all; un-watered planted tiles never progress, and there's no
-   "wilting"/repeat-watering mechanic yet — flag if that's wanted).
-4. **Harvest resets soil to `tilled`, not `empty`.** So the tile is
-   immediately ready to replant without re-tilling. If tilling should be a
-   renewable/limited resource (i.e. degrade after harvest), this needs to
-   change.
-5. **No player-vs-tile ownership/turn locking.** Both players can act on
-   the same tile in quick succession; the server just applies whatever
-   valid transition arrives first (last-valid-action-wins, no conflict UI).
-6. **Camera is fixed** (slight-angle top-down, no orbit controls), matching
-   Cube Blast's fixed-camera convention — flag if you want player-controlled
-   camera/zoom.
+1. **Fully shared plot, not per-player — settled, not open.** The GDD's
+   "division of labor, not division of space" pillar already answers
+   this. Either player can till/plant/water/harvest any tile on one
+   shared 6x6 grid, by design — this is not a decision left to revisit.
+2. **Invite-link room join — implemented.** The client reads `?room=xyz`
+   from the URL (generating one if absent, stamped into the address bar)
+   and passes it to the server as a Socket.io handshake query param. The
+   server creates rooms on demand instead of hardcoding a single shared
+   room, so two friends can now play by sharing a URL instead of two tabs
+   on one machine. Still capacity 2 per room, first-come first-served,
+   3rd connection rejected with `roomFull`.
+3. **Growth timer: 75 seconds from watering to grown, with wilting.**
+   Rebalanced from the original 20s test value to a real-time coordination
+   number. A planted-but-unwatered tile now **wilts** (loses its seed,
+   reverts to `tilled`) after 45 seconds — this is the mechanism that
+   gives "division of labor" actual stakes; without it watering was just
+   a formality click. (Only one crop type exists today, so there's no
+   per-crop-tier staggering yet — revisit if/when multiple crops ship.)
+4. **Harvest resets soil to `tilled`, not `empty` — kept as-is.** Making
+   tilling a renewable/limited resource would add upkeep friction with no
+   new agency, and breaks the GDD's clean till→plant→water→harvest→sell
+   loop. Not revisited.
+5. **No player-vs-tile ownership/turn locking — kept as-is, UX gap
+   flagged to game-experience-designer.** Locking would contradict the
+   GDD's "no blocking griefing" pillar, so the server still applies
+   whatever valid transition arrives first. But a same-tile collision
+   currently resolves silently — a player can lose an action with no
+   feedback, which reads as a bug rather than a coordination beat. Routed
+   to game-experience-designer for a lightweight "someone else just acted
+   here" signal; not yet implemented.
+6. **Camera is fixed** (slight-angle top-down, no orbit controls) — kept.
+   Fully legible at 6x6; only worth revisiting if the grid grows beyond
+   one screenful.
 
 ## Structure
 

@@ -26,8 +26,9 @@ let activeTool = 'till';
 const statusEl = document.getElementById('status');
 const toastEl = document.getElementById('toast');
 let toastTimer = null;
-function showToast(message) {
+function showToast(message, variant = 'error') {
   toastEl.textContent = message;
+  toastEl.classList.toggle('toast--collision', variant === 'collision');
   toastEl.style.display = 'block';
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (toastEl.style.display = 'none'), 2000);
@@ -242,6 +243,28 @@ function applyTile(tile) {
     });
 }
 
+// Brief emissive pulse on a specific tile so a same-tile collision reads as
+// "look, right there — someone already acted" instead of only a toast the
+// player has to read and mentally map back to a tile. Uses emissive (not
+// the base soil color) so it never fights with the real STAGE_COLOR that
+// tilesUpdated just applied.
+function flashTile(x, y) {
+  const entry = tileMeshes.get(tileKey(x, y));
+  if (!entry) return;
+  const material = entry.soilMesh.material;
+  material.emissive.setHex(0x3c6e96);
+  material.emissiveIntensity = 0.9;
+  const start = performance.now();
+  const duration = 450;
+  function fade(now) {
+    const t = Math.min(1, (now - start) / duration);
+    material.emissiveIntensity = 0.9 * (1 - t);
+    if (t < 1) requestAnimationFrame(fade);
+    else material.emissive.setHex(0x000000);
+  }
+  requestAnimationFrame(fade);
+}
+
 // --- Static scene dressing (barn + fence line), loaded once real state arrives ---
 let staticPropsAdded = false;
 async function addStaticProps() {
@@ -332,7 +355,23 @@ renderer.domElement.addEventListener('touchend', (event) => {
 });
 
 // --- Socket.io client ---
-const socket = io(SERVER_URL);
+// Room code comes from ?room=xyz in the URL (invite-link join, per the
+// GDD) — falls back to the server's default shared room if absent, and
+// stamps the code into the URL so the first player can just copy the tab's
+// address bar to invite a second player into the same room.
+function getOrCreateRoomCode() {
+  const params = new URLSearchParams(window.location.search);
+  let room = params.get('room');
+  if (!room) {
+    room = Math.random().toString(36).slice(2, 8);
+    params.set('room', room);
+    window.history.replaceState(null, '', `${window.location.pathname}?${params}`);
+  }
+  return room;
+}
+
+const roomCode = getOrCreateRoomCode();
+const socket = io(SERVER_URL, { query: { room: roomCode } });
 
 socket.on('connect', () => {
   statusEl.textContent = 'connected';
@@ -370,8 +409,15 @@ socket.on('tilesUpdated', (tiles) => {
   tiles.forEach(applyTile);
 });
 
-socket.on('actionRejected', ({ message }) => {
-  showToast(message);
+socket.on('actionRejected', ({ message, collision, actorName, verbPast, x, y }) => {
+  if (collision) {
+    const who = actorName || 'Another farmer';
+    const verb = verbPast || 'changed';
+    showToast(`Too slow — ${who} already ${verb} that tile!`, 'collision');
+    if (typeof x === 'number' && typeof y === 'number') flashTile(x, y);
+  } else {
+    showToast(message, 'error');
+  }
 });
 
 // --- Render loop ---
