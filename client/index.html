@@ -73,9 +73,11 @@
     z-index: 10;
   }
   /* Same-tile collision ("someone beat you to it") reads as a coordination
-     moment, not an error — deliberately not red, and the icon + copy carry
-     the distinction too (not color alone), so it stays legible for
-     colorblind players. */
+     moment, not an error — deliberately not red, and the message copy
+     (actor name + past-tense verb, e.g. "Sam already tilled that tile!")
+     carries the distinction too, not color alone, so it stays legible for
+     colorblind players. There is no separate icon glyph — copy is the
+     redundant signal. */
   #toast.toast--collision {
     background: rgba(60, 110, 150, 0.92);
   }

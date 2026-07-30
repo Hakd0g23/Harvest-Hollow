@@ -25,9 +25,11 @@ empty --till--> tilled --plant--> planted --water--> watered --(timer)--> grown 
 - Clients send `{ type, x, y }` actions and render whatever the server
   broadcasts back (`tilesUpdated` / `roomState`) — no client-side prediction
   or optimistic state yet.
-- Placeholder visuals only: colored boxes for soil, simple sphere/cone
-  "crop" meshes for planted/watered/grown stages. Real Quaternius models
-  are a separate swap-in pass.
+- Real Quaternius models for soil/crop stages (no more placeholder boxes).
+- Shared wallet economy: planting deducts a seed cost (3g), harvested
+  crops go to a shared inventory, and `sell` cashes out the whole
+  inventory at once (6g/crop) — one wallet for the room, not per-player,
+  matching the GDD's "success depends on the group" pillar.
 
 ## Running locally (multiplayer test)
 
@@ -40,7 +42,7 @@ npm run dev            # runs server (:4000) and client (:5173) together
 
 Then open **separate browser tabs** at `http://localhost:5173` to simulate
 multiple players on the same farm. Each tab is a distinct socket
-connection / player slot (max 6 per room). The first tab to load generates
+connection / player slot (solo-primary, up to 6 players per room). The first tab to load generates
 a room code and stamps it into the URL (`?room=xyz`) — open that same URL
 in the other tabs to join the same farm instead of starting a new one.
 
@@ -51,9 +53,23 @@ npm run dev:server   # http://localhost:4000
 npm run dev:client   # http://localhost:5173
 ```
 
-No deployment (Netlify/Render) is set up yet — this is local-only for now,
-matching LuckyLanes' and Cube Blast's deployed shape once this skeleton is
-validated in a real multiplayer session.
+## Deployment
+
+Live and verified end-to-end (till → plant → water → harvest → sell,
+cross-player, real invite-link room):
+
+- **Client (GitHub Pages):** https://hakd0g23.github.io/Harvest-Hollow/
+- **Server (Render):** https://harvest-hollow-server.onrender.com
+
+Open the client URL to start a new farm (it stamps a room code into the
+URL), or append `?room=<code>` to join an existing one — same invite-link
+model as local dev, just pointed at the deployed server instead of
+`localhost:4000`.
+
+The Render service is on the free tier and spins down after 15 minutes of
+inactivity — the first request after idle can take 30-60 seconds to wake
+up (you'll see a blank/loading state briefly while the client waits for
+`roomState`). Server infra is defined in `render.yaml` (Render Blueprint).
 
 ## Saving
 
@@ -78,9 +94,9 @@ have been resolved or flagged to the right owner:
    from the URL (generating one if absent, stamped into the address bar)
    and passes it to the server as a Socket.io handshake query param. The
    server creates rooms on demand instead of hardcoding a single shared
-   room, so two friends can now play by sharing a URL instead of two tabs
-   on one machine. Still capacity 2 per room, first-come first-served,
-   3rd connection rejected with `roomFull`.
+   room, so a group can now play by sharing a URL instead of stacking tabs
+   on one machine. Capacity is 6 per room (`MAX_PLAYERS`), first-come
+   first-served, the 7th connection rejected with `roomFull`.
 3. **Growth timer: 75 seconds from watering to grown, with wilting.**
    Rebalanced from the original 20s test value to a real-time coordination
    number. A planted-but-unwatered tile now **wilts** (loses its seed,
@@ -92,14 +108,14 @@ have been resolved or flagged to the right owner:
    tilling a renewable/limited resource would add upkeep friction with no
    new agency, and breaks the GDD's clean till→plant→water→harvest→sell
    loop. Not revisited.
-5. **No player-vs-tile ownership/turn locking — kept as-is, UX gap
-   flagged to game-experience-designer.** Locking would contradict the
-   GDD's "no blocking griefing" pillar, so the server still applies
-   whatever valid transition arrives first. But a same-tile collision
-   currently resolves silently — a player can lose an action with no
-   feedback, which reads as a bug rather than a coordination beat. Routed
-   to game-experience-designer for a lightweight "someone else just acted
-   here" signal; not yet implemented.
+5. **No player-vs-tile ownership/turn locking — kept as-is, collision
+   feedback implemented.** Locking would contradict the GDD's "no
+   blocking griefing" pillar, so the server still applies whatever valid
+   transition arrives first (within a `COLLISION_WINDOW_MS` of 3s of
+   another player's action on the same tile) and flags the rejection as
+   a `collision`. The client surfaces this as a distinct toast plus a
+   brief emissive pulse on the contested tile, so losing an action reads
+   as "someone beat you to it" rather than a silent bug.
 6. **Camera is fixed** (slight-angle top-down, no orbit controls) — kept.
    Fully legible at 6x6; only worth revisiting if the grid grows beyond
    one screenful.
