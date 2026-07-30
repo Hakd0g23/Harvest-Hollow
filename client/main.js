@@ -512,6 +512,34 @@ const tileMeshes = new Map(); // "x,y" -> { soilMesh, cropMesh, pendingToken }
 const knownTiles = new Map(); // "x,y" -> latest tile object, for the 1s status-icon countdown tick
 const tileStatusIcons = new Map(); // "x,y" -> { sprite, canvas, ctx, texture }
 
+// Live tile results arrive over the socket the instant the server accepts
+// an action — well before the avatar has actually walked there. Applying
+// them immediately made the crop/soil visually change before the avatar
+// arrived, which read as the action happening independent of the avatar
+// rather than caused by it. Each tile carries `lastActionBy` (the acting
+// player's socket id), so results are queued per-player here and only
+// applied once that player's avatar actually reaches the tile (see the
+// arrival check in animate()) — full roomState resyncs (initial load, grid
+// expansion) are NOT gated, since those aren't "an action just happened".
+const pendingTileUpdatesByPlayer = new Map(); // playerId -> Map(tileKey -> tile)
+
+function queuePendingTile(tile) {
+  const playerId = tile.lastActionBy;
+  if (!playerId) {
+    applyTile(tile); // no actor on record (shouldn't normally happen) — fall back to immediate
+    return;
+  }
+  if (!pendingTileUpdatesByPlayer.has(playerId)) pendingTileUpdatesByPlayer.set(playerId, new Map());
+  pendingTileUpdatesByPlayer.get(playerId).set(tileKey(tile.x, tile.y), tile);
+}
+
+function flushPendingTilesForPlayer(playerId) {
+  const pending = pendingTileUpdatesByPlayer.get(playerId);
+  if (!pending || pending.size === 0) return;
+  pending.forEach((tile) => applyTile(tile));
+  pending.clear();
+}
+
 // A billboard sprite (always faces camera, no manual per-frame rotation
 // needed) drawn from a small canvas so it can show an emoji glyph plus a
 // live countdown/label without loading a dedicated icon atlas.
@@ -609,6 +637,7 @@ function buildGrid(size) {
   knownTiles.clear();
   tileStatusIcons.forEach((entry) => scene.remove(entry.sprite));
   tileStatusIcons.clear();
+  pendingTileUpdatesByPlayer.clear();
   gridSize = size;
   const soilGeo = new THREE.BoxGeometry(TILE_SIZE, 0.15, TILE_SIZE);
   for (let y = 0; y < size; y++) {
@@ -788,6 +817,14 @@ async function spawnAvatarForPlayer(playerId) {
       // starts on login.
       targetX: object3D.position.x,
       targetZ: object3D.position.z,
+      // "Home" is the last real (server-assigned) tile position — separate
+      // from targetX/targetZ so ambient idle wandering can nudge the avatar
+      // a little off that spot and bring it back without losing track of
+      // where it's actually supposed to be.
+      homeX: object3D.position.x,
+      homeZ: object3D.position.z,
+      wandering: false,
+      wanderTimer: 3 + Math.random() * 4,
     });
   } catch (err) {
     console.error(`[assets] failed to load player avatar "${modelName}"`, err);
@@ -823,6 +860,10 @@ function placeAvatarOnTile(playerId, x, y) {
   const [wx, wz] = worldPos(x, y);
   avatar.targetX = wx;
   avatar.targetZ = wz + AVATAR_TILE_EDGE_OFFSET;
+  avatar.homeX = avatar.targetX; // real assigned spot — idle wandering nudges off this and returns to it
+  avatar.homeZ = avatar.targetZ;
+  avatar.wandering = false; // a real placement always overrides any in-progress ambient wander
+  avatar.wanderTimer = 3 + Math.random() * 4;
   avatar.object3D.visible = true;
   // Every placement — including the very first one, walking in from
   // avatarSpawnOrigin() — now interpolates in the render loop below instead
@@ -1390,7 +1431,7 @@ socket.on('playerLeft', ({ id }) => {
 });
 
 socket.on('tilesUpdated', (tiles) => {
-  tiles.forEach(applyTile);
+  tiles.forEach(queuePendingTile);
 });
 
 // Authoritative position push: fired on every accepted action (see
@@ -1420,26 +1461,25 @@ function animate() {
   const delta = clock.getDelta();
   updateDayNightCycle(delta);
   mixers.forEach((mixer) => mixer.update(delta));
-  // Interpolate each avatar toward its target tile position instead of
-  // snapping in placeAvatarOnTile(), so every move — including the very
-  // first login walk-in from avatarSpawnOrigin() — reads as a walk rather
-  // than a teleport. Frame-rate independent (exponential decay driven by
-  // delta, not a fixed per-frame step) so it looks the same at 30fps or
-  // 144fps. AVATAR_MOVE_SPEED is a decay-rate constant, not a literal
-  // units/sec speed; lower than the old value (8) so a step is visibly
-  // traversed instead of snapping shut in ~1 frame at high framerates.
-  const AVATAR_MOVE_SPEED = 4.5;
-  const ARRIVE_EPSILON = 0.015;
-  playerAvatars.forEach((avatar) => {
+  // Move each avatar toward its target tile position instead of snapping in
+  // placeAvatarOnTile(), so every move — including the very first login
+  // walk-in from avatarSpawnOrigin() — reads as a walk rather than a
+  // teleport. Constant-speed (not the old exponential ease-decay, which
+  // moved fastest at the start and crawled into the stop — a real walking
+  // gait holds a steady pace and then arrives) with a final snap once
+  // within ARRIVE_EPSILON so it doesn't crawl asymptotically forever.
+  const AVATAR_WALK_SPEED = 1.5; // world units/sec
+  const ARRIVE_EPSILON = 0.02;
+  playerAvatars.forEach((avatar, playerId) => {
     if (!avatar?.object3D) return;
     const pos = avatar.object3D.position;
     const dx = avatar.targetX - pos.x;
     const dz = avatar.targetZ - pos.z;
     const dist = Math.hypot(dx, dz);
     if (dist > ARRIVE_EPSILON) {
-      const t = 1 - Math.exp(-AVATAR_MOVE_SPEED * delta);
-      pos.x += dx * t;
-      pos.z += dz * t;
+      const step = Math.min(dist, AVATAR_WALK_SPEED * delta);
+      pos.x += (dx / dist) * step;
+      pos.z += (dz / dist) * step;
       // Face the direction of travel — a straight-on slide with no turn is
       // what reads as "gliding" rather than "walking" even once the motion
       // itself is smooth.
@@ -1451,9 +1491,39 @@ function animate() {
         avatar.isWalking = true;
         avatar.idleAction.crossFadeTo(avatar.walkAction.reset().play(), 0.15, false);
       }
-    } else if (avatar.isWalking && avatar.walkAction && avatar.idleAction) {
-      avatar.isWalking = false;
-      avatar.walkAction.crossFadeTo(avatar.idleAction.reset().play(), 0.25, false);
+    } else {
+      pos.x = avatar.targetX; // snap the last fraction shut instead of an infinite ease-in tail
+      pos.z = avatar.targetZ;
+      if (avatar.isWalking && avatar.walkAction && avatar.idleAction) {
+        avatar.isWalking = false;
+        avatar.walkAction.crossFadeTo(avatar.idleAction.reset().play(), 0.25, false);
+      }
+      // Only once the avatar has actually arrived does whatever action
+      // caused this trip become visible (crop/soil change) — see
+      // queuePendingTile()/flushPendingTilesForPlayer() above.
+      flushPendingTilesForPlayer(playerId);
+
+      // Ambient idle wandering: small, aimless steps around "home" (the
+      // last real assigned tile) whenever nothing else is going on, so a
+      // parked avatar reads as a living character instead of a static prop.
+      // Any real placeAvatarOnTile() call resets wandering/wanderTimer and
+      // takes priority over this the moment it happens.
+      if (!avatar.wandering) {
+        avatar.wanderTimer -= delta;
+        if (avatar.wanderTimer <= 0) {
+          const angle = Math.random() * Math.PI * 2;
+          const radius = 0.15 + Math.random() * 0.2;
+          avatar.targetX = avatar.homeX + Math.cos(angle) * radius;
+          avatar.targetZ = avatar.homeZ + Math.sin(angle) * radius;
+          avatar.wandering = true;
+        }
+      } else {
+        // Arrived at the little wander spot — pause on idle, then head home.
+        avatar.targetX = avatar.homeX;
+        avatar.targetZ = avatar.homeZ;
+        avatar.wandering = false;
+        avatar.wanderTimer = 3 + Math.random() * 4;
+      }
     }
   });
   if (hintRing) {
