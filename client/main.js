@@ -435,13 +435,6 @@ function applyTile(tile) {
   // the same way a local click would instead of leaving a stale ring.
   if (tile.x === 0 && tile.y === 0 && tile.stage !== 'empty') clearFirstActionHint();
 
-  // Only spawn/place an avatar for players still actually connected — a
-  // save file's tiles can carry `lastActionBy` ids from a previous session
-  // that already disconnected, and those shouldn't leave a ghost avatar.
-  if (tile.lastActionBy && knownPlayerIds.has(tile.lastActionBy)) {
-    spawnAvatarForPlayer(tile.lastActionBy).then(() => placeAvatarOnTile(tile.lastActionBy, tile.x, tile.y));
-  }
-
   if (entry.cropMesh) {
     tileGroup.remove(entry.cropMesh);
     entry.cropMesh = null;
@@ -498,12 +491,10 @@ function flashTile(x, y) {
 // `lastActionBy`, the socket.id of whoever last changed that tile). Rather
 // than adding server-side position tracking (out of this pass's scope —
 // that's a server/game-logic change, not an asset-wiring one), each
-// player's avatar is placed on whichever tile they most recently acted on,
-// derived client-side from `lastActionBy` on every tilesUpdated/roomState
-// tile. This is a reasonable proxy for "where is that player working" in a
-// shared-plot co-op game and needs zero server changes — if a truer live
-// cursor position is wanted later, the server needs a `cursorMoved` event
-// and a per-player {x,y}, which is a game-engineer task, not an asset one.
+// player's avatar is placed at that player's authoritative server-tracked
+// tile position (room.players[].x/y on roomState, 'playerMoved' events on
+// every subsequent action) — the server owns this now; the client no
+// longer infers it from `lastActionBy` tile history.
 const AVATAR_MODEL_NAMES = ['player_avatar_1', 'player_avatar_2'];
 const avatarGroup = new THREE.Group();
 scene.add(avatarGroup);
@@ -874,6 +865,15 @@ socket.on('roomState', (room) => {
   knownPlayerIds.clear();
   room.players.forEach((p) => knownPlayerIds.add(p.id));
   room.tiles.forEach(applyTile);
+  // Authoritative avatar placement from server-tracked player position, not
+  // inferred from tile history — a player with x/y still null hasn't acted
+  // yet this session and stays unspawned (matches prior "hidden until first
+  // placement" behavior).
+  room.players.forEach((p) => {
+    if (p.x !== null && p.y !== null) {
+      spawnAvatarForPlayer(p.id).then(() => placeAvatarOnTile(p.id, p.x, p.y));
+    }
+  });
   maxPlayers = room.maxPlayers;
   statusEl.textContent = `connected — ${room.players.length}/${maxPlayers} players`;
   renderEconomy(room.wallet, room.inventory);
@@ -934,6 +934,14 @@ socket.on('playerLeft', ({ id }) => {
 
 socket.on('tilesUpdated', (tiles) => {
   tiles.forEach(applyTile);
+});
+
+// Authoritative position push: fired on every accepted action (see
+// server.js), independent of tilesUpdated so avatar placement isn't tied to
+// which tiles a splash-radius tool action happened to touch.
+socket.on('playerMoved', ({ id, x, y }) => {
+  if (!knownPlayerIds.has(id)) return;
+  spawnAvatarForPlayer(id).then(() => placeAvatarOnTile(id, x, y));
 });
 
 socket.on('actionRejected', ({ message, collision, actorName, verbPast, x, y }) => {

@@ -415,7 +415,12 @@ io.on('connection', (socket) => {
     return;
   }
 
-  const player = { id: socket.id, name: `Farmer ${room.players.size + 1}` };
+  // x/y is this player's authoritative tile position, per the game's
+  // "act on a tile" movement model (no free-roam) — null until their first
+  // action places them somewhere. Server-owned and pushed to clients on
+  // every relevant change (see the 'action' handler and expandPlot's
+  // re-keying below); the client never infers it from tile history.
+  const player = { id: socket.id, name: `Farmer ${room.players.size + 1}`, x: null, y: null };
   room.players.set(socket.id, player);
   socket.join(room.id);
 
@@ -440,6 +445,18 @@ io.on('connection', (socket) => {
     io.to(room.id).emit('tilesUpdated', result.tiles ?? [result.tile]);
     if (result.economyChanged) {
       io.to(room.id).emit('economyUpdate', { wallet: room.wallet, inventory: room.inventory });
+    }
+    // Authoritative position update: a player "is" wherever they just acted
+    // (action.x/y — the tile they clicked, not e.g. a splash-radius
+    // neighbor a tool upgrade also touched). Broadcast unconditionally on
+    // every accepted action, including repeat actions on the same tile —
+    // idempotent for position, and the client's own moved-tile check
+    // decides whether that's worth a walk animation.
+    const player = room.players.get(socket.id);
+    if (player) {
+      player.x = action.x;
+      player.y = action.y;
+      io.to(room.id).emit('playerMoved', { id: socket.id, x: action.x, y: action.y });
     }
     saveRoomSoon(room);
   });
@@ -484,6 +501,15 @@ io.on('connection', (socket) => {
     }
     room.gridSize = newSize;
     room.tiles = newTiles;
+    // Re-key player positions the same way tiles above were re-keyed (shift
+    // by `grow` on each axis) so an expansion doesn't strand a player's
+    // avatar at stale coordinates in the new, larger grid space.
+    for (const p of room.players.values()) {
+      if (p.x !== null && p.y !== null) {
+        p.x += grow;
+        p.y += grow;
+      }
+    }
     io.to(room.id).emit('roomState', publicRoomState(room)); // grid shape changed — full resync, not a diff
     saveRoomSoon(room);
   });
