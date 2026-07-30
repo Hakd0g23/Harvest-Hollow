@@ -16,9 +16,14 @@ import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 import { io } from 'https://cdn.socket.io/4.8.1/socket.io.esm.min.js';
 
-// --- Design decision (flagged for user): server URL is hardcoded for local dev ---
-// No env/config layer yet since this never leaves localhost in this skeleton.
-const SERVER_URL = 'http://localhost:4000';
+// Hostname-aware server URL: localhost dev talks to the local server on
+// :4000; anything else (the deployed GitHub Pages client) talks to the
+// deployed Render service. No build-time env layer needed since this is a
+// static, no-bundler client — the choice is made at runtime off location.
+const SERVER_URL =
+  window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? 'http://localhost:4000'
+    : 'https://harvest-hollow-server.onrender.com';
 
 const TOOLS = ['till', 'plant', 'water', 'harvest'];
 let activeTool = 'till';

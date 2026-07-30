@@ -276,13 +276,24 @@ function growthTick(io) {
   }
 }
 
+// CORS allow-list: comma-separated origins in CORS_ORIGIN (set on Render for
+// the deployed GitHub Pages client + local dev). Falls back to allow-all when
+// unset so local/offline dev never breaks over a missing env var.
+const allowedOrigins = (process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+const corsOptions = allowedOrigins.length
+  ? { origin: allowedOrigins }
+  : { origin: '*' };
+
 const app = express();
-app.use(cors());
+app.use(cors(corsOptions));
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: '*' },
+  cors: corsOptions,
 });
 
 function sanitizeRoomId(raw) {
