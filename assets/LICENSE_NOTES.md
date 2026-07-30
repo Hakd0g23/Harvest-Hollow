@@ -81,6 +81,35 @@ per-pack, since Quaternius has occasionally released packs under other terms. Re
 
 ---
 
+## Action SFX (audio pass, no ambient/music yet)
+- Local path: `assets/sfx/` (7 one-shot `.ogg` files, all trimmed/renamed copies of
+  the originals below — no pitch/EQ edits, just renamed for clarity)
+- All three source packs are CC0 — no attribution legally required, safe for a
+  commercial itch.io release; attribution given below anyway per each author's
+  request where stated.
+
+| File | Action | Source pack | Original filename | License |
+|---|---|---|---|---|
+| `till.ogg` | Till soil | Kenney — Impact Sounds | `Audio/impactMining_002.ogg` | CC0 1.0 |
+| `plant.ogg` | Plant seed | Kenney — Impact Sounds | `Audio/impactSoft_medium_002.ogg` | CC0 1.0 |
+| `water.ogg` | Water crop | rubberduck — "40 CC0 Water/Splash/Slime SFX" (OpenGameArt) | `splash_09.ogg` | CC0 1.0 |
+| `harvest.ogg` | Harvest crop | Kenney — Interface Sounds | `Audio/pluck_001.ogg` | CC0 1.0 |
+| `sell.ogg` | Sell / coin | Kenney — RPG Audio | `Audio/handleCoins.ogg` | CC0 1.0 |
+| `ui_click.ogg` | Generic UI click | Kenney — Interface Sounds | `Audio/click_003.ogg` | CC0 1.0 |
+| `toast.ogg` | Success / toast chime | Kenney — Interface Sounds | `Audio/confirmation_002.ogg` | CC0 1.0 |
+
+- Kenney sources: https://kenney.nl/assets/impact-sounds ,
+  https://kenney.nl/assets/interface-sounds , https://kenney.nl/assets/rpg-audio
+  — all CC0 1.0 Universal, confirmed via each pack's bundled `License.txt`.
+- Water source: https://opengameart.org/content/40-cc0-water-splash-slime-sfx
+  by rubberduck, CC0, confirmed on the OpenGameArt listing page.
+- All files are short one-shots (a few KB / well under a second to ~1s), fitting
+  the "casual/light" brief — no looping ambience or music included in this pass,
+  per current scope (ambient/music loop deferred to a later pass).
+- Not yet wired into `client/main.js` — this pass only sources/places the files;
+  wiring into the till/plant/water/harvest/sell/UI action handlers is a follow-up
+  task for game-debugger.
+
 ## Format note for Three.js
 
 None of these four packs ship a glTF/GLB export (Quaternius only provides Blend/FBX/OBJ for

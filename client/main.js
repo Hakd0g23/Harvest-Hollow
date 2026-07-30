@@ -479,6 +479,12 @@ async function spawnAvatarForPlayer(playerId) {
       walkAction,
       tileKey: null, // "x,y" of the tile this avatar is currently placed on, for move detection
       walkTimeout: null,
+      // Target world position for this frame's interpolation, and whether
+      // we've ever placed this avatar yet (first placement should snap, not
+      // walk in from the origin parking spot).
+      targetX: object3D.position.x,
+      targetZ: object3D.position.z,
+      hasBeenPlaced: false,
     });
   } catch (err) {
     console.error(`[assets] failed to load player avatar "${modelName}"`, err);
@@ -514,9 +520,18 @@ function placeAvatarOnTile(playerId, x, y) {
   const moved = avatar.tileKey !== null && avatar.tileKey !== key;
   avatar.tileKey = key;
   const [wx, wz] = worldPos(x, y);
-  avatar.object3D.position.x = wx;
-  avatar.object3D.position.z = wz + AVATAR_TILE_EDGE_OFFSET;
+  avatar.targetX = wx;
+  avatar.targetZ = wz + AVATAR_TILE_EDGE_OFFSET;
   avatar.object3D.visible = true;
+  // First placement (avatar was parked at the origin, invisible) should snap
+  // straight to its tile rather than visibly sliding in from (0,0) the
+  // instant it appears; every placement after that interpolates smoothly in
+  // the render loop below instead of teleporting frame-to-frame.
+  if (!avatar.hasBeenPlaced) {
+    avatar.object3D.position.x = wx;
+    avatar.object3D.position.z = avatar.targetZ;
+    avatar.hasBeenPlaced = true;
+  }
 
   // Sell a moment of "walking" whenever the avatar actually changes tiles
   // (not on the very first placement, and not on repeat actions on the same
@@ -550,6 +565,25 @@ function gridHalfExtent() {
 
 const BARN_MAX_DIM = 2.2;
 
+// Barn is loaded once, but its diagonal offset depends on gridSize, which
+// changes at runtime (plot expansion re-emits a full 'roomState' with a
+// larger gridSize — see server.js's expandPlot handler). Positioning it only
+// once at load time is what let the barn overlap playable tiles again once
+// the grid grew past whatever size it was framed for at load: the offset
+// baked in the *old* gridReach and never got recomputed for the new one.
+// Re-deriving position from the current gridSize on every call (instead of
+// baking it in once) keeps the barn clear of the grid at every tier.
+let barnObject = null;
+function positionBarn() {
+  if (!barnObject) return;
+  const gridReach = gridHalfExtent(); // already the farthest tile edge per axis — don't add TILE_SIZE/2 again
+  const barnHalfDiagonal = (BARN_MAX_DIM / 2) * Math.SQRT2;
+  const gap = 0.2;
+  const barnOffset = gridReach + barnHalfDiagonal + gap;
+  barnObject.position.x = -barnOffset;
+  barnObject.position.z = -barnOffset;
+}
+
 let staticPropsAdded = false;
 async function addStaticProps() {
   if (staticPropsAdded) return;
@@ -561,16 +595,11 @@ async function addStaticProps() {
     const barn = barnTemplate.clone(true);
     const groundY = normalizeToSize(barn, BARN_MAX_DIM);
     barn.rotation.y = Math.PI / 4;
-    // Barn sits on the grid's diagonal corner (x === z offset), so what
-    // matters is clearance along that diagonal: the grid's footprint reach
-    // along the diagonal, plus the barn's own half-diagonal footprint (it's
-    // rotated 45deg, so its corner — not its half-width — is what could
-    // clip back into the grid), plus a visible gap.
-    const gridReach = gridHalfExtent(); // already the farthest tile edge per axis — don't add TILE_SIZE/2 again
-    const barnHalfDiagonal = (BARN_MAX_DIM / 2) * Math.SQRT2;
-    const gap = 0.2;
-    const barnOffset = gridReach + barnHalfDiagonal + gap;
-    barn.position.set(-barnOffset, groundY, -barnOffset);
+    // Barn sits on the grid's diagonal corner (x === z offset); see
+    // positionBarn() above for why (x, z) are set there instead of here.
+    barn.position.y = groundY;
+    barnObject = barn;
+    positionBarn();
     scene.add(barn);
   } catch (err) {
     console.error('[assets] failed to load barn', err);
@@ -756,7 +785,8 @@ socket.on('roomState', (room) => {
   renderExpandButton(currentGridSize, currentExpandCost, currentWallet);
   renderUpgradeButton(currentToolTier, currentUpgradeCost, currentWallet);
 
-  addStaticProps(); // no-op after first call
+  addStaticProps(); // no-op after first call; still repositions the barn below
+  positionBarn(); // gridSize may have changed (e.g. plot expansion) — re-derive the barn's offset
 
   const overlay = document.getElementById('cold-start-overlay');
   if (overlay) overlay.remove();
@@ -823,6 +853,23 @@ function animate() {
   requestAnimationFrame(animate);
   const delta = clock.getDelta();
   mixers.forEach((mixer) => mixer.update(delta));
+  // Interpolate each avatar toward its target tile position instead of
+  // snapping in placeAvatarOnTile(), so a tile-to-tile move reads as a walk
+  // rather than a teleport. Frame-rate independent (exponential decay driven
+  // by delta, not a fixed per-frame step) so it looks the same at 30fps or
+  // 144fps. AVATAR_MOVE_SPEED is a decay-rate constant, not a literal
+  // units/sec speed, but larger = faster convergence.
+  const AVATAR_MOVE_SPEED = 8;
+  playerAvatars.forEach((avatar) => {
+    if (!avatar?.object3D) return;
+    const pos = avatar.object3D.position;
+    const dx = avatar.targetX - pos.x;
+    const dz = avatar.targetZ - pos.z;
+    if (Math.abs(dx) < 0.001 && Math.abs(dz) < 0.001) return;
+    const t = 1 - Math.exp(-AVATAR_MOVE_SPEED * delta);
+    pos.x += dx * t;
+    pos.z += dz * t;
+  });
   if (hintRing) {
     const t = (performance.now() - hintRingStart) / 1000;
     hintRing.position.y = 0.5 + Math.sin(t * 2.4) * 0.08;

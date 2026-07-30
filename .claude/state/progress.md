@@ -11,13 +11,13 @@
 | crash fix + cold-start overlay + cleanup + room-code fix | done | delivered | client/main.js, client/index.html, server/server.js | must |
 | player avatars (Quaternius Ultimate Modular Men) | done | delivered | assets/ultimate-modular-men-pack, client/main.js avatar system; commit 9a4dc15, pushed to main | must |
 | economy gold-sink: progression sink (plot expansion / tool upgrades) | done | delivered | server.js (expandPlot/upgradeTool, gridSize/toolTier), client/main.js, client/index.html; verified live 2026-07-30; commit 9a4dc15, pushed to main | should |
-| economy gold-sink: cosmetic decor sink (fences, scarecrows, paint) | not started | scoped | deferred follow-up to progression sink above | could |
-| audio/sound pass scope decision | not started | decision needed | raised, not yet scoped; user to decide in/out of this pass | should |
+| economy gold-sink: cosmetic decor sink (fences, scarecrows, paint) | not started | scoped | queued after position-sync/barn-fix/audio land (shared main.js file risk); game-debugger | could |
+| audio/sound pass (SFX for till/plant/water/harvest/sell/UI actions, no ambient loop for this pass) | in-progress | scoped | user confirmed INCLUDE 2026-07-30; scope = action SFX only, casual/chiptune style matching existing art; game-asset-director sourcing, game-debugger integrating | should |
 | run-harvest-hollow skill doc fix (growth timer says ~20s, actual is 75s) | done | delivered | .claude/skills/run-harvest-hollow/SKILL.md, also removed stale [debug]-log references | should |
-| true server-side player position sync (avatars currently proxy via last-acted-tile) | not started | scoped | follow-up, not urgent | could |
+| true server-side player position sync (avatars currently proxy via last-acted-tile) | not started | scoped | sequenced after barn-placement fix (both touch client/main.js avatar code); game-debugger | could |
 | avatar/barn layering fix + idle-walk crossfade | done | delivered | client/main.js (avatar scale/edge-offset, barn diagonal placement math, walk crossfade on tile change); Playwright-verified 2026-07-30 (no console errors across rapid tile actions + player disconnect) | must |
-| barn placement reactive to grid expansion | not started | scoped | barn offset computed once at fixed gridSize; could re-overlap at a larger grid tier post-expand, not yet re-tested | could |
+| barn placement reactive to grid expansion | in-progress | scoped | dispatched to game-debugger, parallel with audio sourcing (no file overlap) | could |
 | onboarding/tutorial + accessibility pass | done | delivered | client/index.html, client/main.js — first-visit onboarding card (localStorage-gated, reopenable via "?" help button), Invite button (clipboard copy of room link), pulsing skill-gate hint ring on tile (0,0) until first action (local or co-op partner), aria-live/role on toast + cold-start overlay, dialog semantics + Escape/click-outside on onboarding card, 44px+ touch targets on all new buttons; two-tab Playwright verification passed 2026-07-30 (overlay dismiss/reopen, invite clipboard copy, cross-player hint-ring clear); commit 9a4dc15, pushed to main | should |
 | game-engineer design/market critique of core loop | done | delivered | findings synthesized 2026-07-30 | must |
-| automated test coverage | not started | scoped | none found in repo; add alongside next code change, not standalone | should |
+| automated test coverage | not started | scoped | queued last of code work, after items 1-4 land, to cover them | should |
 | store/marketing page (itch.io) | not started | scoped | hold until remaining fixes verified; release-manager | could |
