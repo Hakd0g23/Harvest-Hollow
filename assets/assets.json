@@ -22,6 +22,18 @@
     "obj": "farm-buildings-pack/OBJ/Fence.obj",
     "mtl": "farm-buildings-pack/OBJ/Fence.mtl"
   },
+  "fence_painted": {
+    "obj": "farm-buildings-pack/OBJ/Fence2.obj",
+    "mtl": "farm-buildings-pack/OBJ/Fence2.mtl"
+  },
+  "cosmetic_well": {
+    "obj": "farm-buildings-pack/OBJ/Well.obj",
+    "mtl": "farm-buildings-pack/OBJ/Well.mtl"
+  },
+  "cosmetic_windmill": {
+    "obj": "farm-buildings-pack/OBJ/Windmill.obj",
+    "mtl": "farm-buildings-pack/OBJ/Windmill.mtl"
+  },
 
   "player_avatar_1": {
     "gltf": "ultimate-modular-men-pack/glTF/Farmer.gltf"

@@ -91,6 +91,7 @@ const economyEl = document.getElementById('economy');
 const sellBtn = document.getElementById('sell-btn');
 const expandBtn = document.getElementById('expand-btn');
 const upgradeBtn = document.getElementById('upgrade-btn');
+const cosmeticBtns = document.querySelectorAll('.cosmetic-btn'); // fenceStyle/well/windmill buy buttons
 const toastEl = document.getElementById('toast');
 let toastTimer = null;
 function showToast(message, variant = 'error') {
@@ -119,6 +120,13 @@ expandBtn.addEventListener('click', () => {
 upgradeBtn.addEventListener('click', () => {
   playSfx('ui_click');
   socket.emit('upgradeTool');
+});
+cosmeticBtns.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    if (btn.classList.contains('owned')) return; // already purchased — nothing to buy
+    playSfx('ui_click');
+    socket.emit('buyCosmetic', { id: btn.dataset.cosmetic });
+  });
 });
 
 // --- Mute toggle: simple localStorage-backed hook next to the help button ---
@@ -218,6 +226,28 @@ function renderUpgradeButton(toolTier, upgradeCost, wallet) {
   upgradeBtn.style.display = '';
   upgradeBtn.textContent = `Upgrade Tool (${upgradeCost}g)`;
   upgradeBtn.disabled = wallet < upgradeCost;
+}
+
+// Cosmetic buy buttons: purely visual gold sink, no gameplay gate. Each
+// button flips to a disabled "Owned" state once purchased and stays that
+// way — unlike expand/upgrade there's no "max tier" concept, each item is
+// independently one-and-done. Hidden until the server's cosmeticCatalog
+// arrives (first roomState) so cost isn't shown as "undefinedg" pre-load.
+function renderCosmeticButtons(catalog, cosmetics, wallet) {
+  if (!catalog) return;
+  cosmeticBtns.forEach((btn) => {
+    const id = btn.dataset.cosmetic;
+    const item = catalog[id];
+    if (!item) {
+      btn.style.display = 'none';
+      return;
+    }
+    btn.style.display = '';
+    const owned = !!cosmetics?.[id];
+    btn.classList.toggle('owned', owned);
+    btn.disabled = owned || wallet < item.cost;
+    btn.textContent = owned ? `${item.label} ✓` : `${item.label} (${item.cost}g)`;
+  });
 }
 
 document.querySelectorAll('.tool-btn').forEach((btn) => {
@@ -701,19 +731,95 @@ async function addStaticProps() {
     console.error('[assets] failed to load barn', err);
   }
 
+  await buildFenceLine(half);
+}
+
+// --- Cosmetic gold-sink props (purchased, purely decorative) ---
+// The border fence line is built by a swappable helper (rather than being
+// inlined in addStaticProps like before) so a "Painted Fence" cosmetic
+// purchase can rebuild it with a different model name mid-session, without
+// duplicating the placement math. `fenceLineGroup` holds every fence mesh so
+// a rebuild can clear the old style before adding the new one.
+const fenceLineGroup = new THREE.Group();
+scene.add(fenceLineGroup);
+
+async function buildFenceLine(half) {
+  const modelName = purchasedCosmetics.fenceStyle ? 'fence_painted' : 'fence';
   try {
-    const fenceTemplate = await loadModel('fence');
+    const fenceTemplate = await loadModel(modelName);
+    fenceLineGroup.clear();
     const spacing = 0.9;
     const fenceCount = Math.max(1, Math.ceil((half * 2) / spacing));
     for (let i = 0; i < fenceCount; i++) {
       const fence = fenceTemplate.clone(true);
       const groundY = normalizeToSize(fence, 0.85);
       fence.position.set(-half + i * spacing, groundY, -half - 0.5);
-      scene.add(fence);
+      fenceLineGroup.add(fence);
     }
   } catch (err) {
-    console.error('[assets] failed to load fence', err);
+    console.error(`[assets] failed to load ${modelName}`, err);
   }
+}
+
+// Well/windmill are one-off decorative props, added once purchased, parked
+// on the two grid corners the barn doesn't already occupy (barn sits on the
+// -x/-z diagonal — see positionBarn) so nothing overlaps a playable tile at
+// any grid tier.
+const cosmeticPropObjects = {}; // id -> THREE.Object3D, once loaded
+const COSMETIC_PROP_CONFIG = {
+  well: { model: 'cosmetic_well', maxDim: 1.1, corner: [1, -1] }, // +x/-z corner
+  windmill: { model: 'cosmetic_windmill', maxDim: 2.4, corner: [1, 1] }, // +x/+z corner
+};
+
+function positionCosmeticProp(id) {
+  const object = cosmeticPropObjects[id];
+  const config = COSMETIC_PROP_CONFIG[id];
+  if (!object || !config) return;
+  const gridReach = gridHalfExtent();
+  const gap = 0.6;
+  const offset = gridReach + config.maxDim / 2 + gap;
+  const [signX, signZ] = config.corner;
+  object.position.x = signX * offset;
+  object.position.z = signZ * offset;
+}
+
+async function addCosmeticProp(id) {
+  if (cosmeticPropObjects[id]) return; // already added
+  const config = COSMETIC_PROP_CONFIG[id];
+  if (!config) return;
+  try {
+    const template = await loadModel(config.model);
+    const object = template.clone(true);
+    const groundY = normalizeToSize(object, config.maxDim);
+    object.position.y = groundY;
+    cosmeticPropObjects[id] = object;
+    positionCosmeticProp(id);
+    scene.add(object);
+  } catch (err) {
+    console.error(`[assets] failed to load cosmetic "${id}"`, err);
+  }
+}
+
+// Re-derives every purchased cosmetic's position — mirrors positionBarn()
+// being re-run on every roomState in case gridSize changed (plot expansion)
+// after a cosmetic was already placed.
+function repositionCosmeticProps() {
+  Object.keys(cosmeticPropObjects).forEach(positionCosmeticProp);
+}
+
+// Local cache of which cosmetics are owned, keyed the same as room.cosmetics
+// (id -> true). Drives both the fence-style swap and which one-off props
+// exist in the scene; updated from roomState (initial) and cosmeticsUpdated
+// (live purchase by any player in the room).
+let purchasedCosmetics = {};
+let cosmeticCatalog = null;
+
+function applyCosmetics(cosmetics) {
+  purchasedCosmetics = cosmetics ?? {};
+  buildFenceLine(frustumHalfExtent());
+  Object.keys(COSMETIC_PROP_CONFIG).forEach((id) => {
+    if (purchasedCosmetics[id]) addCosmeticProp(id);
+  });
 }
 
 // --- Skill-gate hint: a pulsing ring over one empty tile until the player's
@@ -894,8 +1000,13 @@ socket.on('roomState', (room) => {
   renderExpandButton(currentGridSize, currentExpandCost, currentWallet);
   renderUpgradeButton(currentToolTier, currentUpgradeCost, currentWallet);
 
+  cosmeticCatalog = room.cosmeticCatalog ?? cosmeticCatalog;
+  applyCosmetics(room.cosmetics);
+  renderCosmeticButtons(cosmeticCatalog, purchasedCosmetics, currentWallet);
+
   addStaticProps(); // no-op after first call; still repositions the barn below
   positionBarn(); // gridSize may have changed (e.g. plot expansion) — re-derive the barn's offset
+  repositionCosmeticProps(); // same gridSize-changed concern as the barn above
 
   const overlay = document.getElementById('cold-start-overlay');
   if (overlay) overlay.remove();
@@ -911,9 +1022,16 @@ socket.on('economyUpdate', ({ wallet, inventory, lastSale }) => {
   currentWallet = wallet;
   renderExpandButton(currentGridSize, currentExpandCost, currentWallet);
   renderUpgradeButton(currentToolTier, currentUpgradeCost, currentWallet);
+  renderCosmeticButtons(cosmeticCatalog, purchasedCosmetics, currentWallet);
   if (lastSale) {
     showToast(`Sold ${lastSale.count} wheat for ${lastSale.earned}g!`, 'success');
   }
+});
+
+socket.on('cosmeticsUpdated', ({ cosmetics }) => {
+  applyCosmetics(cosmetics);
+  renderCosmeticButtons(cosmeticCatalog, purchasedCosmetics, currentWallet);
+  showToast('Cosmetic purchased!', 'success');
 });
 
 socket.on('toolTierUpdated', ({ toolTier, upgradeCost }) => {

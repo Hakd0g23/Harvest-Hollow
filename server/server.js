@@ -38,6 +38,15 @@ function loadRoomSave(roomId) {
     if (typeof saved.wallet === 'number') result.wallet = saved.wallet;
     if (saved.inventory && typeof saved.inventory === 'object') result.inventory = saved.inventory;
     if (TOOL_TIERS.includes(saved.toolTier)) result.toolTier = saved.toolTier;
+    if (saved.cosmetics && typeof saved.cosmetics === 'object') {
+      // Only keep keys that still exist in COSMETICS — drops stale ids from
+      // an older save if the catalog ever changes, same defensive shape as
+      // gridSize/toolTier above.
+      result.cosmetics = {};
+      for (const id of Object.keys(saved.cosmetics)) {
+        if (COSMETICS[id] && saved.cosmetics[id]) result.cosmetics[id] = true;
+      }
+    }
     return result;
   } catch {
     // no save yet, or unreadable/stale — fall through to fresh defaults
@@ -59,6 +68,7 @@ function saveRoomSoon(room) {
       wallet: room.wallet,
       inventory: room.inventory,
       toolTier: room.toolTier,
+      cosmetics: room.cosmetics,
       savedAt: Date.now(),
     });
     fs.writeFile(savePath(room.id), payload, (err) => {
@@ -84,6 +94,23 @@ const GRID_EXPAND_COST = { 6: 240, 8: 560, 10: 1100 }; // keyed by *current* gri
 const TOOL_TIERS = [0, 1, 2]; // 0 = 1x1 (unchanged), 1 = 3x3, 2 = 5x5 — till/water/harvest only, not plant
 const TOOL_UPGRADE_COST = { 0: 300, 1: 900 }; // keyed by *current* toolTier -> cost to reach next tier
 const TOOL_RADIUS = { 0: 0, 1: 1, 2: 2 }; // Chebyshev radius around the clicked tile
+
+// --- Cosmetic gold sink (2026-07-30) ---
+// Purely visual, no gameplay effect whatsoever — a second thing to spend
+// shared gold on besides the plot-expand/tool-upgrade progression sink
+// above. Same "one wallet, one shared purchase" pattern: each item is
+// bought at most once per room, id keys off the room's `cosmetics` map
+// (id -> true once purchased), and the id itself IS the persisted state —
+// no separate "owned" boolean list to keep in sync. All three reuse
+// models already present in assets/ (farm-buildings-pack) rather than
+// sourcing anything new: Fence2 (an alternate fence style, i.e. the
+// "paint the fence" ask), Well, and Windmill are all decorative props
+// with zero gameplay hookup elsewhere in server.js.
+const COSMETICS = {
+  fenceStyle: { cost: 120, label: 'Painted Fence' },
+  well: { cost: 180, label: 'Well' },
+  windmill: { cost: 260, label: 'Windmill' },
+};
 
 // Growth timing: real-time co-op pressure, not idle-game pacing (per GDD's
 // "who tills, who waters, who harvests" coordination pitch). 75s from
@@ -158,6 +185,7 @@ function createRoom(id) {
     toolTier: save.toolTier ?? 0,
     wallet: save.wallet ?? STARTING_WALLET,
     inventory: save.inventory ?? { [CROP_TYPE]: 0 }, // harvested-but-unsold crops
+    cosmetics: save.cosmetics ?? {}, // id -> true, once purchased; see COSMETICS
   };
 }
 
@@ -201,6 +229,8 @@ function publicRoomState(room) {
     toolTier: room.toolTier,
     expandCost: GRID_EXPAND_COST[room.gridSize] ?? null,
     upgradeCost: TOOL_UPGRADE_COST[room.toolTier] ?? null,
+    cosmetics: room.cosmetics,
+    cosmeticCatalog: COSMETICS,
   };
 }
 
@@ -532,6 +562,31 @@ io.on('connection', (socket) => {
     room.toolTier = newTier;
     io.to(room.id).emit('economyUpdate', { wallet: room.wallet, inventory: room.inventory });
     io.to(room.id).emit('toolTierUpdated', { toolTier: room.toolTier, upgradeCost: TOOL_UPGRADE_COST[room.toolTier] ?? null });
+    saveRoomSoon(room);
+  });
+
+  // Cosmetic purchase: purely visual, no gameplay effect. Each id in
+  // COSMETICS can be bought at most once per room (shared wallet, same as
+  // expandPlot/upgradeTool above) — a repeat buy on an already-owned id is
+  // rejected rather than silently re-charging.
+  socket.on('buyCosmetic', ({ id } = {}) => {
+    const item = COSMETICS[id];
+    if (!item) {
+      return socket.emit('actionRejected', { message: 'Unknown cosmetic item.', collision: false });
+    }
+    if (room.cosmetics[id]) {
+      return socket.emit('actionRejected', { message: `${item.label} already purchased.`, collision: false });
+    }
+    if (room.wallet < item.cost) {
+      return socket.emit('actionRejected', {
+        message: `Not enough gold for ${item.label} (need ${item.cost}g, have ${room.wallet}g).`,
+        collision: false,
+      });
+    }
+    room.wallet -= item.cost;
+    room.cosmetics[id] = true;
+    io.to(room.id).emit('economyUpdate', { wallet: room.wallet, inventory: room.inventory });
+    io.to(room.id).emit('cosmeticsUpdated', { cosmetics: room.cosmetics });
     saveRoomSoon(room);
   });
 

@@ -11,7 +11,7 @@
 | crash fix + cold-start overlay + cleanup + room-code fix | done | delivered | client/main.js, client/index.html, server/server.js | must |
 | player avatars (Quaternius Ultimate Modular Men) | done | delivered | assets/ultimate-modular-men-pack, client/main.js avatar system; commit 9a4dc15, pushed to main | must |
 | economy gold-sink: progression sink (plot expansion / tool upgrades) | done | delivered | server.js (expandPlot/upgradeTool, gridSize/toolTier), client/main.js, client/index.html; verified live 2026-07-30; commit 9a4dc15, pushed to main | should |
-| economy gold-sink: cosmetic decor sink (fences, scarecrows, paint) | not started | scoped | queued after position-sync/barn-fix/audio land (shared main.js file risk); game-debugger | could |
+| economy gold-sink: cosmetic decor sink (fences, scarecrows, paint) | done | verified | server.js (COSMETICS catalog, buyCosmetic), assets/assets.json, client/index.html, client/main.js; 3 items (painted fence 120g, well 180g, windmill 260g) reusing existing Quaternius farm-buildings-pack; Playwright-verified purchase/deduct/persist/render, zero console errors; commit pending | could |
 | audio/sound pass (SFX for till/plant/water/harvest/sell/UI actions, no ambient loop for this pass) | done | verified | assets/sfx/*.ogg, client/main.js playSfx pool, client/index.html mute button; Playwright-verified (correct sound per action, mute suppresses playback, zero console errors); commit a0f1ba4 (local, not yet pushed) | should |
 | run-harvest-hollow skill doc fix (growth timer says ~20s, actual is 75s) | done | delivered | .claude/skills/run-harvest-hollow/SKILL.md, also removed stale [debug]-log references | should |
 | true server-side player position sync (avatars currently proxy via last-acted-tile) | done | verified | server/server.js (authoritative player.x/y, playerMoved event, expandPlot re-key), client/main.js (consumes roomState.players + playerMoved instead of lastActionBy scan); fixed a real resync ordering bug in the old proxy; Playwright-verified cross-client sync, zero console errors; commit pending | could |
@@ -23,3 +23,5 @@
 | store/marketing page (itch.io) | not started | scoped | hold until remaining fixes verified; release-manager | could |
 
 | mobile: tool selection UI overlaps grid (responsive layout bug) | done | verified | client/index.html (flex layout: HUD in normal flow instead of absolute-over-canvas), client/main.js (ResizeObserver for HUD height changes); Playwright-verified 375px/390px/1280px widths + tap regression check, zero console errors; evidence .claude/state/evidence/mobile-layout-fix/; commit pending | must |
+
+| pre-existing bug: border fence line sits just past camera frustum bottom bound, effectively invisible at default framing (found during cosmetic-sink work, not introduced by it) | not started | scoped | low priority follow-up; game-debugger | could |

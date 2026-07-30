@@ -125,6 +125,18 @@
     border: 1px solid #2792c9;
     color: #cbe9f7;
   }
+  /* Cosmetic buy buttons: same shape as expand/upgrade but a distinct
+     hue (purple-brown) so they read as "the decorative sink", not another
+     progression upgrade. */
+  .cosmetic-btn {
+    background: #3a2c1e;
+    border: 1px solid #c98a27;
+    color: #f7dcb0;
+  }
+  .cosmetic-btn.owned {
+    opacity: 0.6;
+    cursor: default;
+  }
   #invite-btn, #help-btn {
     background: #3a2c4a;
     border: 1px solid #8a5ed6;
@@ -296,6 +308,9 @@
     <button id="sell-btn" class="tool-btn" type="button">Sell All</button>
     <button id="expand-btn" class="tool-btn" type="button" style="display:none;">Expand Plot</button>
     <button id="upgrade-btn" class="tool-btn" type="button" style="display:none;">Upgrade Tool</button>
+    <button id="cosmetic-fenceStyle-btn" class="tool-btn cosmetic-btn" type="button" data-cosmetic="fenceStyle" style="display:none;">Painted Fence</button>
+    <button id="cosmetic-well-btn" class="tool-btn cosmetic-btn" type="button" data-cosmetic="well" style="display:none;">Well</button>
+    <button id="cosmetic-windmill-btn" class="tool-btn cosmetic-btn" type="button" data-cosmetic="windmill" style="display:none;">Windmill</button>
     <button id="invite-btn" class="tool-btn" type="button">Invite</button>
     <button id="help-btn" class="tool-btn" type="button" aria-label="Show how to play">?</button>
     <button id="mute-btn" class="tool-btn" type="button" aria-label="Mute sound">🔊</button>
