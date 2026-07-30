@@ -22,4 +22,4 @@
 | automated test coverage | not started | scoped | queued last of code work, after items 1-4 land, to cover them | should |
 | store/marketing page (itch.io) | not started | scoped | hold until remaining fixes verified; release-manager | could |
 
-| mobile: tool selection UI overlaps grid (responsive layout bug) | not started | scoped | user-reported 2026-07-30; slotted before cosmetic decor sink (same client files); game-debugger | must |
+| mobile: tool selection UI overlaps grid (responsive layout bug) | done | verified | client/index.html (flex layout: HUD in normal flow instead of absolute-over-canvas), client/main.js (ResizeObserver for HUD height changes); Playwright-verified 375px/390px/1280px widths + tap regression check, zero console errors; evidence .claude/state/evidence/mobile-layout-fix/; commit pending | must |

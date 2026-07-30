@@ -279,6 +279,14 @@ function resize() {
   layoutCamera();
 }
 window.addEventListener('resize', resize);
+// The HUD is normal-flow above #canvas-wrap and can change height without a
+// window resize event (e.g. expand/upgrade buttons toggling visibility, or
+// the toolbar wrapping to a different number of rows) — a ResizeObserver on
+// the wrap itself catches those and keeps the renderer/camera in sync with
+// however much space is actually left below the HUD.
+if (typeof ResizeObserver !== 'undefined') {
+  new ResizeObserver(() => resize()).observe(wrap);
+}
 
 scene.add(new THREE.HemisphereLight(0xffffff, 0x223311, 0.9));
 const sun = new THREE.DirectionalLight(0xffffff, 0.8);

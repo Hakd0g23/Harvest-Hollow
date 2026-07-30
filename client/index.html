@@ -13,11 +13,23 @@
     font-family: system-ui, sans-serif;
     overflow: hidden;
   }
+  body {
+    /* HUD and canvas stack in normal flow so the (variably tall, wraps to
+       multiple rows on narrow viewports) toolbar always reserves its own
+       space instead of floating over the grid — see #canvas-wrap below. */
+    display: flex;
+    flex-direction: column;
+  }
   #hud {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
+    /* Normal-flow, not position:absolute: on narrow viewports this wraps to
+       2-3 rows (title, buttons, status each on their own line) and can run
+       150-200px+ tall. When this was position:absolute + #canvas-wrap was
+       position:absolute; inset:0, the canvas filled the full viewport behind
+       it and the HUD's own background covered the top rows of grid tiles —
+       reproduced at 375px/390px widths. Flow layout + flex:1 on
+       #canvas-wrap (below) makes the canvas naturally start below however
+       tall the HUD currently is. */
+    flex: 0 0 auto;
     padding: 10px 14px;
     display: flex;
     align-items: center;
@@ -56,8 +68,17 @@
     color: #b8c9a0;
   }
   #canvas-wrap {
-    position: absolute;
-    inset: 0;
+    position: relative;
+    flex: 1 1 auto;
+    /* Without this a flex child's min-height defaults to its content size,
+       which would let the canvas force the HUD off-screen instead of
+       shrinking to the remaining space. */
+    min-height: 0;
+  }
+  #canvas-wrap canvas {
+    /* Canvas is inline by default, which leaves a few px of baseline gap
+       below it inside the flex box — display:block avoids that sliver. */
+    display: block;
   }
   #toast {
     position: absolute;
