@@ -389,6 +389,17 @@ async function loadModel(name) {
     return new Promise((resolve, reject) => {
       const mtlLoader = new MTLLoader();
       mtlLoader.setPath(ASSETS_BASE);
+      // MTLLoader resolves texture refs (map_Kd, ...) relative to its
+      // resourcePath, which defaults to the same `path` used to fetch the
+      // .mtl file itself (ASSETS_BASE) — NOT the .mtl's own folder. That
+      // was invisible while every pack's materials were flat colors with no
+      // map_Kd (farm-buildings-pack, ultimate-crops-pack), but any pack
+      // referencing a texture (the Cube World packs' shared Atlas.png)
+      // resolved it against the wrong folder, 404'd, and rendered pure
+      // black. Pointing resourcePath at the .mtl's actual directory fixes
+      // every future textured pack too, not just this one.
+      const mtlDir = entry.mtl.slice(0, entry.mtl.lastIndexOf('/') + 1);
+      mtlLoader.setResourcePath(ASSETS_BASE + mtlDir);
       mtlLoader.load(
         entry.mtl,
         (materials) => {
@@ -446,6 +457,18 @@ const STAGE_MODEL_SIZE = {
 // server remains the sole authority on when a tile actually flips stage.
 const GROWTH_MS = 75_000; // watered -> grown
 const WILT_MS = 45_000; // planted -> wilts back to tilled if not watered in time
+
+// A large flat ground plane beneath everything — without this the world
+// beyond the tile grid was just the scene background color showing through,
+// so the barn/fence/decor all read as floating in a flat-color void with no
+// actual ground underneath them.
+const groundMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(200, 200),
+  new THREE.MeshStandardMaterial({ color: 0x3f6b2e })
+);
+groundMesh.rotation.x = -Math.PI / 2;
+groundMesh.position.y = -0.2; // clear of the soil tiles' own -0.075 so it never z-fights
+scene.add(groundMesh);
 
 const tileGroup = new THREE.Group();
 scene.add(tileGroup);
@@ -726,7 +749,7 @@ async function spawnAvatarForPlayer(playerId) {
     const groundY = normalizeToSize(object3D, 0.55);
     const [originX, originZ] = avatarSpawnOrigin();
     object3D.position.set(originX, groundY, originZ); // parked at the top-middle spawn point until a tile action places it
-    object3D.visible = false; // hidden until we know a real tile to place it on
+    object3D.visible = true; // visible immediately, idling at the spawn point — no more waiting on a first click to appear
 
     let mixer = null;
     let idleAction = null;
@@ -1130,6 +1153,19 @@ function actOnScreenPoint(clientX, clientY) {
   socket.emit('action', { type: activeTool, x, y });
   playSfx(activeTool); // till/plant/water/harvest sfx keys match TOOLS values 1:1
   clearFirstActionHint();
+  // Redirect the local avatar toward the clicked tile immediately instead
+  // of waiting for the server's playerMoved echo. Without this, clicking a
+  // second tile while still mid-walk to the first only redirected once the
+  // server round-trip for the SECOND click landed — and if that action was
+  // rejected (wrong tool for that tile's stage), no playerMoved ever
+  // arrived, so the avatar looked stuck heading to tile 1 until re-clicking
+  // it "unstuck" things. Moving optimistically here means every click
+  // redirects the walk right away regardless of whether the action itself
+  // is ultimately accepted; a rejected action just means nothing changes
+  // once the avatar gets there.
+  if (socket.id) {
+    spawnAvatarForPlayer(socket.id).then(() => placeAvatarOnTile(socket.id, x, y));
+  }
 }
 
 renderer.domElement.addEventListener('click', (event) => {
@@ -1227,14 +1263,15 @@ socket.on('roomState', (room) => {
   knownPlayerIds.clear();
   room.players.forEach((p) => knownPlayerIds.add(p.id));
   room.tiles.forEach(applyTile);
-  // Authoritative avatar placement from server-tracked player position, not
-  // inferred from tile history — a player with x/y still null hasn't acted
-  // yet this session and stays unspawned (matches prior "hidden until first
-  // placement" behavior).
+  // Every player gets a visible avatar immediately (parked at
+  // avatarSpawnOrigin(), idling) rather than staying invisible until their
+  // first action — a player with x/y still null just hasn't picked a real
+  // tile yet this session, so it walks onto one the moment placeAvatarOnTile
+  // is called for a real server-tracked position.
   room.players.forEach((p) => {
-    if (p.x !== null && p.y !== null) {
-      spawnAvatarForPlayer(p.id).then(() => placeAvatarOnTile(p.id, p.x, p.y));
-    }
+    spawnAvatarForPlayer(p.id).then(() => {
+      if (p.x !== null && p.y !== null) placeAvatarOnTile(p.id, p.x, p.y);
+    });
   });
   maxPlayers = room.maxPlayers;
   statusEl.textContent = `connected — ${room.players.length}/${maxPlayers} players`;
@@ -1295,7 +1332,10 @@ socket.on('playerJoined', (player) => {
     const n = parseInt(s, 10);
     return `${n + 1}/${maxPlayers}`;
   });
-  if (player?.id) knownPlayerIds.add(player.id);
+  if (player?.id) {
+    knownPlayerIds.add(player.id);
+    spawnAvatarForPlayer(player.id); // visible immediately at avatarSpawnOrigin(), same as roomState's own players
+  }
 });
 
 socket.on('playerLeft', ({ id }) => {
