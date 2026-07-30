@@ -29,6 +29,63 @@ const SERVER_URL =
 const TOOLS = ['till', 'plant', 'water', 'harvest'];
 let activeTool = 'till';
 
+// --- SFX ---
+// Small pooled-Audio helper: each sound name gets a fixed-size ring of
+// HTMLAudioElements instead of one shared element, so two rapid triggers of
+// the same sound (e.g. quick-tapping harvest across several tiles) each get
+// their own element and play cleanly instead of the second call cutting off
+// or restarting the first (the stutter/overlap issue a single shared Audio()
+// would cause). Playback is local-only by construction: playSfx() is only
+// ever called from code paths that already gate on "this client caused it"
+// (the local click/tap handlers and showToast(), which itself is only
+// invoked for this client's own toasts) — never from a per-tick or
+// every-remote-update path, so it can't spam on other players' actions.
+const SFX_FILES = {
+  till: 'till.ogg',
+  plant: 'plant.ogg',
+  water: 'water.ogg',
+  harvest: 'harvest.ogg',
+  sell: 'sell.ogg',
+  ui_click: 'ui_click.ogg',
+  toast: 'toast.ogg',
+};
+const SFX_POOL_SIZE = 4;
+const sfxPools = new Map(); // name -> { pool: HTMLAudioElement[], index: number }
+const SFX_MUTED_KEY = 'hh_sfx_muted_v1';
+let sfxMuted = localStorage.getItem(SFX_MUTED_KEY) === '1';
+
+function getSfxPool(name) {
+  if (!sfxPools.has(name)) {
+    const pool = [];
+    for (let i = 0; i < SFX_POOL_SIZE; i++) {
+      const audio = new Audio(`./assets/sfx/${SFX_FILES[name]}`);
+      audio.preload = 'auto';
+      audio.volume = 0.55;
+      pool.push(audio);
+    }
+    sfxPools.set(name, { pool, index: 0 });
+  }
+  return sfxPools.get(name);
+}
+
+function playSfx(name) {
+  if (sfxMuted || !SFX_FILES[name]) return;
+  const entry = getSfxPool(name);
+  const audio = entry.pool[entry.index];
+  entry.index = (entry.index + 1) % entry.pool.length;
+  try {
+    audio.currentTime = 0;
+    // Browsers reject play() before any user gesture on the page — by the
+    // time any of these fire the player has already clicked/tapped
+    // something, but swallow the rejection defensively rather than let an
+    // unhandled promise rejection show up as a spurious console error.
+    audio.play().catch(() => {});
+  } catch {
+    // no-op — a synchronous throw here would only be a very old/broken
+    // browser's Audio implementation, not worth surfacing to the player.
+  }
+}
+
 const statusEl = document.getElementById('status');
 const economyEl = document.getElementById('economy');
 const sellBtn = document.getElementById('sell-btn');
@@ -43,6 +100,7 @@ function showToast(message, variant = 'error') {
   toastEl.style.display = 'block';
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (toastEl.style.display = 'none'), 2000);
+  playSfx('toast');
 }
 
 function renderEconomy(wallet, inventory) {
@@ -50,9 +108,34 @@ function renderEconomy(wallet, inventory) {
   economyEl.textContent = `Gold: ${wallet} | Wheat: ${wheat}`;
 }
 
-sellBtn.addEventListener('click', () => socket.emit('sell'));
-expandBtn.addEventListener('click', () => socket.emit('expandPlot'));
-upgradeBtn.addEventListener('click', () => socket.emit('upgradeTool'));
+sellBtn.addEventListener('click', () => {
+  playSfx('sell');
+  socket.emit('sell');
+});
+expandBtn.addEventListener('click', () => {
+  playSfx('ui_click');
+  socket.emit('expandPlot');
+});
+upgradeBtn.addEventListener('click', () => {
+  playSfx('ui_click');
+  socket.emit('upgradeTool');
+});
+
+// --- Mute toggle: simple localStorage-backed hook next to the help button ---
+const muteBtn = document.getElementById('mute-btn');
+function updateMuteButton() {
+  if (!muteBtn) return;
+  muteBtn.textContent = sfxMuted ? '🔇' : '🔊';
+  muteBtn.setAttribute('aria-label', sfxMuted ? 'Unmute sound' : 'Mute sound');
+}
+if (muteBtn) {
+  updateMuteButton();
+  muteBtn.addEventListener('click', () => {
+    sfxMuted = !sfxMuted;
+    localStorage.setItem(SFX_MUTED_KEY, sfxMuted ? '1' : '0');
+    updateMuteButton();
+  });
+}
 
 // --- Onboarding: one-time first-visit primer + reachable-anytime help ---
 // Kept to a single dismissible card (no build step, no bundler here) rather
@@ -90,10 +173,22 @@ function closeOnboarding() {
   helpBtn.focus();
 }
 
-inviteBtn.addEventListener('click', () => copyInviteLink(inviteBtn));
-onboardCopyLinkBtn.addEventListener('click', () => copyInviteLink(onboardCopyLinkBtn));
-helpBtn.addEventListener('click', openOnboarding);
-onboardDismissBtn.addEventListener('click', closeOnboarding);
+inviteBtn.addEventListener('click', () => {
+  playSfx('ui_click');
+  copyInviteLink(inviteBtn);
+});
+onboardCopyLinkBtn.addEventListener('click', () => {
+  playSfx('ui_click');
+  copyInviteLink(onboardCopyLinkBtn);
+});
+helpBtn.addEventListener('click', () => {
+  playSfx('ui_click');
+  openOnboarding();
+});
+onboardDismissBtn.addEventListener('click', () => {
+  playSfx('ui_click');
+  closeOnboarding();
+});
 onboardingOverlay.addEventListener('click', (e) => {
   if (e.target === onboardingOverlay) closeOnboarding(); // click-outside-card dismisses, same as Escape
 });
@@ -127,6 +222,8 @@ function renderUpgradeButton(toolTier, upgradeCost, wallet) {
 
 document.querySelectorAll('.tool-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
+    if (!btn.dataset.tool) return; // this handler only owns the till/plant/water/harvest selector row
+    playSfx('ui_click');
     activeTool = btn.dataset.tool;
     document.querySelectorAll('.tool-btn').forEach((b) => b.classList.toggle('active', b === btn));
   });
@@ -678,6 +775,7 @@ function actOnScreenPoint(clientX, clientY) {
   if (!hit) return;
   const { x, y } = hit.object.userData;
   socket.emit('action', { type: activeTool, x, y });
+  playSfx(activeTool); // till/plant/water/harvest sfx keys match TOOLS values 1:1
   clearFirstActionHint();
 }
 
@@ -733,7 +831,10 @@ const socket = io(SERVER_URL, { query: { room: roomCode } });
 // already sends) — not gated behind a build-time flag since this project
 // has no bundler/env layer to gate it with.
 window.__hh = {
-  actOnTile: (tool, x, y) => socket.emit('action', { type: tool, x, y }),
+  actOnTile: (tool, x, y) => {
+    socket.emit('action', { type: tool, x, y });
+    playSfx(tool);
+  },
 };
 
 socket.on('connect', () => {
