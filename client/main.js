@@ -147,7 +147,14 @@ const TILE_GAP = 0.08;
 let gridSize = GRID_SIZE_FALLBACK;
 
 function frustumHalfExtent() {
-  return (gridSize * (TILE_SIZE + TILE_GAP)) / 2 + 1;
+  // Margin beyond the grid's own extent, so camera-framed dressing (barn,
+  // fence line) clears the grid instead of clipping into it. Was a flat +1,
+  // which was tight enough that the corner-decoration barn either had to
+  // sit close enough to overlap tile (0,0) or fall outside the frustum
+  // entirely once pushed clear of the grid — this camera is tilted, and the
+  // tilt eats into vertical headroom faster than horizontal, so the margin
+  // needs to be generous enough to cover that, not just "the grid + a bit".
+  return (gridSize * (TILE_SIZE + TILE_GAP)) / 2 + 2.6;
 }
 
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
@@ -438,20 +445,41 @@ async function spawnAvatarForPlayer(playerId) {
     const gltf = await loadFreshGltfScene(modelName);
     if (!playerAvatars.has(playerId)) return; // player already left mid-load
     const object3D = gltf.scene;
-    const groundY = normalizeToSize(object3D, 0.9); // ~farm-animal scale; reads clearly top-down
+    // Was 0.9 — nearly as large as TILE_SIZE (1), so the avatar's footprint
+    // dominated whatever tile it stood on and visually swallowed the crop
+    // mesh/soil color underneath it (both share the same x,z). 0.55 keeps it
+    // clearly readable top-down (it's still the tallest thing on a tile)
+    // without fully occluding the tile it's standing on.
+    const groundY = normalizeToSize(object3D, 0.55);
     object3D.position.set(0, groundY, 0); // parked at origin until a tile action places it
     object3D.visible = false; // hidden until we know a real tile to place it on
 
     let mixer = null;
+    let idleAction = null;
+    let walkAction = null;
     const idleClip = gltf.animations.find((c) => c.name === 'Idle');
+    const walkClip = gltf.animations.find((c) => c.name === 'Walk');
     if (idleClip) {
       mixer = new THREE.AnimationMixer(object3D);
-      mixer.clipAction(idleClip).play();
+      idleAction = mixer.clipAction(idleClip);
+      idleAction.play();
+      if (walkClip) {
+        walkAction = mixer.clipAction(walkClip);
+        walkAction.setLoop(THREE.LoopRepeat);
+      }
       mixers.push(mixer);
     }
 
     avatarGroup.add(object3D);
-    playerAvatars.set(playerId, { object3D, mixer, modelName });
+    playerAvatars.set(playerId, {
+      object3D,
+      mixer,
+      modelName,
+      idleAction,
+      walkAction,
+      tileKey: null, // "x,y" of the tile this avatar is currently placed on, for move detection
+      walkTimeout: null,
+    });
   } catch (err) {
     console.error(`[assets] failed to load player avatar "${modelName}"`, err);
     playerAvatars.delete(playerId);
@@ -466,32 +494,83 @@ function removeAvatarForPlayer(playerId) {
       const idx = mixers.indexOf(avatar.mixer);
       if (idx !== -1) mixers.splice(idx, 1);
     }
+    if (avatar.walkTimeout) clearTimeout(avatar.walkTimeout);
   }
   playerAvatars.delete(playerId);
 }
 
+// Standing an avatar dead-center on the tile it just acted on put its feet
+// directly on top of the (much smaller) crop mesh / soil tint, hiding the
+// exact thing the player needs to see feedback on. Nudging it toward the
+// camera-facing edge of the tile keeps the avatar clearly on that tile
+// (still the closest thing to it) while leaving the tile's center — where
+// the crop/soil color renders — unobstructed from the top-down camera.
+const AVATAR_TILE_EDGE_OFFSET = 0.32;
+
 function placeAvatarOnTile(playerId, x, y) {
   const avatar = playerAvatars.get(playerId);
   if (!avatar?.object3D) return; // still loading, or never spawned (e.g. self before roomState)
+  const key = tileKey(x, y);
+  const moved = avatar.tileKey !== null && avatar.tileKey !== key;
+  avatar.tileKey = key;
   const [wx, wz] = worldPos(x, y);
   avatar.object3D.position.x = wx;
-  avatar.object3D.position.z = wz;
+  avatar.object3D.position.z = wz + AVATAR_TILE_EDGE_OFFSET;
   avatar.object3D.visible = true;
+
+  // Sell a moment of "walking" whenever the avatar actually changes tiles
+  // (not on the very first placement, and not on repeat actions on the same
+  // tile) — this is a snap-to-tile position update, not continuous
+  // locomotion, so a real walk cycle synced to travel isn't available; a
+  // brief crossfade is the honest amount of motion this data supports.
+  if (moved && avatar.walkAction && avatar.idleAction) {
+    if (avatar.walkTimeout) clearTimeout(avatar.walkTimeout);
+    avatar.idleAction.crossFadeTo(avatar.walkAction.reset().play(), 0.15, false);
+    avatar.walkTimeout = setTimeout(() => {
+      avatar.walkAction.crossFadeTo(avatar.idleAction.reset().play(), 0.25, false);
+      avatar.walkTimeout = null;
+    }, 500);
+  }
 }
 
 // --- Static scene dressing (barn + fence line), loaded once real state arrives ---
+// Half-extent of the actual tile grid footprint (distinct from
+// frustumHalfExtent(), which is the *camera framing* margin — using the
+// frustum margin to position the barn left only ~0.6 world units of
+// clearance from the frustum edge, which sits *inside* the grid's real
+// footprint once tile size + the barn's own (rotated) footprint are
+// accounted for. That's what let the barn's corner bleed into tile (0,0):
+// at the default 6x6 grid, the barn's nearest corner landed ~3.59 units from
+// origin while tile (0,0)'s footprint spans ~3.11-4.53 along that same
+// diagonal — a real overlap, not just visually tight.
+function gridHalfExtent() {
+  const step = TILE_SIZE + TILE_GAP;
+  return ((gridSize - 1) / 2) * step + TILE_SIZE / 2;
+}
+
+const BARN_MAX_DIM = 2.2;
+
 let staticPropsAdded = false;
 async function addStaticProps() {
   if (staticPropsAdded) return;
   staticPropsAdded = true;
-  const half = frustumHalfExtent();
+  const half = frustumHalfExtent(); // still used for the fence line's camera-framed span, below
 
   try {
     const barnTemplate = await loadModel('barn');
     const barn = barnTemplate.clone(true);
-    const groundY = normalizeToSize(barn, 2.2);
-    barn.position.set(-(half - 0.6), groundY, -(half - 0.6));
+    const groundY = normalizeToSize(barn, BARN_MAX_DIM);
     barn.rotation.y = Math.PI / 4;
+    // Barn sits on the grid's diagonal corner (x === z offset), so what
+    // matters is clearance along that diagonal: the grid's footprint reach
+    // along the diagonal, plus the barn's own half-diagonal footprint (it's
+    // rotated 45deg, so its corner — not its half-width — is what could
+    // clip back into the grid), plus a visible gap.
+    const gridReach = gridHalfExtent(); // already the farthest tile edge per axis — don't add TILE_SIZE/2 again
+    const barnHalfDiagonal = (BARN_MAX_DIM / 2) * Math.SQRT2;
+    const gap = 0.2;
+    const barnOffset = gridReach + barnHalfDiagonal + gap;
+    barn.position.set(-barnOffset, groundY, -barnOffset);
     scene.add(barn);
   } catch (err) {
     console.error('[assets] failed to load barn', err);
