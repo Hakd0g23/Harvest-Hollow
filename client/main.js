@@ -320,77 +320,19 @@ if (typeof ResizeObserver !== 'undefined') {
   new ResizeObserver(() => resize()).observe(wrap);
 }
 
+// Fixed noon-time lighting — no day/night cycle. The cycle (moving sun,
+// moonlight, lanterns) made assets read as flat black/blank at low
+// dayFactor since most of the loop sat well under full brightness; a
+// static, always-bright setup sidesteps that entirely instead of just
+// tuning the low end again.
 const hemiLight = new THREE.HemisphereLight(0xffffff, 0x223311, 1.6);
 scene.add(hemiLight);
-const sun = new THREE.DirectionalLight(0xffffff, 1.3);
-sun.position.set(5, 10, 5);
+const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+sun.position.set(5, 20, 8);
 scene.add(sun);
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
 scene.add(ambientLight);
-// Cool moonlight, opposite the sun's arc — the day/night cycle previously
-// only dimmed lights toward night with nothing standing in for the sun once
-// it set, so a raised night floor plus lanterns (below) is what actually
-// keeps the grid readable in the dark instead of just "less bright day".
-const moonLight = new THREE.DirectionalLight(0x9db4ff, 0);
-scene.add(moonLight);
-
-// --- Day/night cycle ---
-// A slow, looping sun orbit drives sky color, sun color/intensity, and both
-// ambient sources together so "morning" and "night" read as one coherent
-// lighting state rather than lights drifting independently. Height above
-// the horizon (sunHeight, -1..1) is the single source of truth everything
-// else derives from.
-const DAY_CYCLE_SECONDS = 180; // full morning -> noon -> night -> morning loop
-const SKY_DAY = new THREE.Color(0x8fc3e8);
-const SKY_NIGHT = new THREE.Color(0x0a0e1a);
-const SUN_COLOR_LOW = new THREE.Color(0xff9a56); // warm sunrise/sunset tint
-const SUN_COLOR_HIGH = new THREE.Color(0xffffff); // midday white
-const HEMI_SKY_DAY = new THREE.Color(0xffffff);
-const HEMI_SKY_NIGHT = new THREE.Color(0x1a2240);
-const HEMI_GROUND_DAY = new THREE.Color(0x223311);
-const HEMI_GROUND_NIGHT = new THREE.Color(0x080a10);
-let cycleTime = DAY_CYCLE_SECONDS * 0.18; // start mid-morning, sun climbing
-
-const tmpSunColor = new THREE.Color();
-const tmpSkyColor = new THREE.Color();
-const tmpHemiSky = new THREE.Color();
-const tmpHemiGround = new THREE.Color();
-
-function updateDayNightCycle(delta) {
-  cycleTime = (cycleTime + delta) % DAY_CYCLE_SECONDS;
-  const angle = (cycleTime / DAY_CYCLE_SECONDS) * Math.PI * 2;
-  const sunHeight = Math.sin(angle); // -1 (midnight) .. 1 (noon)
-  const dayFactor = THREE.MathUtils.clamp(sunHeight, 0, 1);
-
-  const nightFactor = THREE.MathUtils.clamp(-sunHeight, 0, 1);
-
-  sun.position.set(Math.cos(angle) * 20, sunHeight * 20, 8);
-  sun.intensity = THREE.MathUtils.lerp(0.05, 1.4, dayFactor);
-  tmpSunColor.lerpColors(SUN_COLOR_LOW, SUN_COLOR_HIGH, Math.sqrt(dayFactor));
-  sun.color.copy(tmpSunColor);
-
-  // Moon rises opposite the sun (same arc, half a cycle out of phase) and
-  // only matters once the sun has actually dropped — full brightness at
-  // midnight, off by the time the sun climbs back above the horizon.
-  moonLight.position.set(Math.cos(angle + Math.PI) * 20, Math.max(0.1, -sunHeight) * 20, -8);
-  moonLight.intensity = THREE.MathUtils.lerp(0, 0.55, nightFactor);
-
-  tmpSkyColor.lerpColors(SKY_NIGHT, SKY_DAY, dayFactor);
-  scene.background = tmpSkyColor.clone();
-
-  // Night floor raised from the original 0.25/0.05 so the grid/props stay
-  // legible at midnight instead of near-black with only the moon and
-  // lanterns (below) picking up the slack entirely on their own.
-  hemiLight.intensity = THREE.MathUtils.lerp(0.45, 1.6, dayFactor);
-  tmpHemiSky.lerpColors(HEMI_SKY_NIGHT, HEMI_SKY_DAY, dayFactor);
-  tmpHemiGround.lerpColors(HEMI_GROUND_NIGHT, HEMI_GROUND_DAY, dayFactor);
-  hemiLight.color.copy(tmpHemiSky);
-  hemiLight.groundColor.copy(tmpHemiGround);
-
-  ambientLight.intensity = THREE.MathUtils.lerp(0.15, 0.4, dayFactor);
-
-  updateLanterns(nightFactor);
-}
+scene.background = new THREE.Color(0x8fc3e8);
 
 // --- Tile stage -> appearance ---
 const STAGE_COLOR = {
@@ -932,7 +874,6 @@ async function addStaticProps() {
 
   await buildFenceLine(half);
   await buildEnvironmentDecor();
-  buildLanterns();
 }
 
 // --- Ambient scenery (Cube World environment props, free decoration) ---
@@ -1039,69 +980,6 @@ async function buildEnvironmentDecor() {
 
 function repositionDecor() {
   decorObjects.forEach((_, index) => positionDecorObject(index));
-}
-
-// --- Lantern posts (night-time visibility, always present) ---
-// Four fixed posts, one per edge midpoint, each pairing a real PointLight
-// (actual illumination) with an emissive bulb mesh (so the light source
-// itself is visible, not just its effect) — both driven by the same
-// nightFactor so the lanterns visibly "turn on" as dusk approaches rather
-// than being always-on fixtures that just don't do anything during the day.
-const LANTERN_SIDES = ['front', 'back', 'left', 'right'];
-const lanterns = [];
-
-function lanternWorldPos(side) {
-  const gridReach = gridHalfExtent();
-  const gap = 1.0;
-  if (side === 'front') return [0, gridReach + gap];
-  if (side === 'back') return [0, -(gridReach + gap)];
-  if (side === 'left') return [-(gridReach + gap), 0];
-  return [gridReach + gap, 0]; // right
-}
-
-function buildLanterns() {
-  LANTERN_SIDES.forEach((side) => {
-    const pole = new THREE.Group();
-    const poleMesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.035, 0.05, 1.1, 6),
-      new THREE.MeshStandardMaterial({ color: 0x3b2a1a })
-    );
-    poleMesh.position.y = 0.55;
-    pole.add(poleMesh);
-
-    const bulbMat = new THREE.MeshStandardMaterial({ color: 0xffe1a8, emissive: 0xffb347, emissiveIntensity: 0 });
-    const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 10), bulbMat);
-    bulb.position.y = 1.15;
-    pole.add(bulb);
-
-    const light = new THREE.PointLight(0xffb347, 0, 4.5, 2);
-    light.position.y = 1.15;
-    pole.add(light);
-
-    scene.add(pole);
-    lanterns.push({ side, pole, bulbMat, light });
-  });
-  repositionLanterns();
-}
-
-function repositionLanterns() {
-  lanterns.forEach(({ side, pole }) => {
-    const [x, z] = lanternWorldPos(side);
-    pole.position.set(x, 0, z);
-  });
-}
-
-function updateLanterns(nightFactor) {
-  // Squaring the curve keeps lanterns dark through most of the day and
-  // ramps them up quickly only once dusk actually sets in, instead of a
-  // flat linear fade that'd have them faintly glowing at high noon.
-  const glow = nightFactor * nightFactor;
-  const lightIntensity = THREE.MathUtils.lerp(0, 1.4, glow);
-  const emissive = THREE.MathUtils.lerp(0, 1.2, glow);
-  lanterns.forEach(({ light, bulbMat }) => {
-    light.intensity = lightIntensity;
-    bulbMat.emissiveIntensity = emissive;
-  });
 }
 
 // --- Cosmetic gold-sink props (purchased, purely decorative) ---
@@ -1378,7 +1256,6 @@ socket.on('roomState', (room) => {
   positionBarn(); // gridSize may have changed (e.g. plot expansion) — re-derive the barn's offset
   repositionCosmeticProps(); // same gridSize-changed concern as the barn above
   repositionDecor(); // same gridSize-changed concern as the barn/cosmetics above
-  repositionLanterns(); // same gridSize-changed concern as the barn/cosmetics/decor above
 
   const overlay = document.getElementById('cold-start-overlay');
   if (overlay) overlay.remove();
@@ -1459,7 +1336,6 @@ const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
   const delta = clock.getDelta();
-  updateDayNightCycle(delta);
   mixers.forEach((mixer) => mixer.update(delta));
   // Move each avatar toward its target tile position instead of snapping in
   // placeAvatarOnTile(), so every move — including the very first login
