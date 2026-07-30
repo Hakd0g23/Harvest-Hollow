@@ -19,8 +19,8 @@
     "mtl": "farm-buildings-pack/OBJ/Barn.mtl"
   },
   "fence": {
-    "obj": "farm-buildings-pack/OBJ/Fence.obj",
-    "mtl": "farm-buildings-pack/OBJ/Fence.mtl"
+    "obj": "cube-world-environment/Fence_Center.obj",
+    "mtl": "cube-world-environment/Fence_Center.mtl"
   },
   "fence_painted": {
     "obj": "farm-buildings-pack/OBJ/Fence2.obj",
@@ -35,10 +35,51 @@
     "mtl": "farm-buildings-pack/OBJ/Windmill.mtl"
   },
 
+  "env_tree_1": {
+    "obj": "cube-world-environment/Tree_1.obj",
+    "mtl": "cube-world-environment/Tree_1.mtl"
+  },
+  "env_tree_2": {
+    "obj": "cube-world-environment/Tree_2.obj",
+    "mtl": "cube-world-environment/Tree_2.mtl"
+  },
+  "env_tree_3": {
+    "obj": "cube-world-environment/Tree_3.obj",
+    "mtl": "cube-world-environment/Tree_3.mtl"
+  },
+  "env_rock_1": {
+    "obj": "cube-world-environment/Rock1.obj",
+    "mtl": "cube-world-environment/Rock1.mtl"
+  },
+  "env_rock_2": {
+    "obj": "cube-world-environment/Rock2.obj",
+    "mtl": "cube-world-environment/Rock2.mtl"
+  },
+  "env_flowers_1": {
+    "obj": "cube-world-environment/Flowers_1.obj",
+    "mtl": "cube-world-environment/Flowers_1.mtl"
+  },
+  "env_flowers_2": {
+    "obj": "cube-world-environment/Flowers_2.obj",
+    "mtl": "cube-world-environment/Flowers_2.mtl"
+  },
+  "env_bamboo_small": {
+    "obj": "cube-world-environment/Bamboo_Small.obj",
+    "mtl": "cube-world-environment/Bamboo_Small.mtl"
+  },
+  "env_bamboo_mid": {
+    "obj": "cube-world-environment/Bamboo_Mid.obj",
+    "mtl": "cube-world-environment/Bamboo_Mid.mtl"
+  },
+  "env_crystal": {
+    "obj": "cube-world-environment/Crystal_Small.obj",
+    "mtl": "cube-world-environment/Crystal_Small.mtl"
+  },
+
   "player_avatar_1": {
-    "gltf": "ultimate-modular-men-pack/glTF/Farmer.gltf"
+    "gltf": "cube-world-characters/Character_Male_1.gltf"
   },
   "player_avatar_2": {
-    "gltf": "ultimate-modular-men-pack/glTF/Casual_2.gltf"
+    "gltf": "cube-world-characters/Character_Female_1.gltf"
   }
 }

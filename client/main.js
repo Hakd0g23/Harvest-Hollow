@@ -281,7 +281,7 @@ function frustumHalfExtent() {
   // entirely once pushed clear of the grid — this camera is tilted, and the
   // tilt eats into vertical headroom faster than horizontal, so the margin
   // needs to be generous enough to cover that, not just "the grid + a bit".
-  return (gridSize * (TILE_SIZE + TILE_GAP)) / 2 + 2.6;
+  return (gridSize * (TILE_SIZE + TILE_GAP)) / 2 + 3.2;
 }
 
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
@@ -294,8 +294,10 @@ function layoutCamera() {
   camera.bottom = -half;
   camera.updateProjectionMatrix();
 }
-// Slight-angle top-down: mostly overhead, small tilt for depth perception.
-camera.position.set(0, 14, 6);
+// Angled top-down: steep enough to still read the whole grid at a glance,
+// but tilted further toward horizontal than a pure overhead shot so avatars
+// (and crops) show more of their profile instead of just a top-down silhouette.
+camera.position.set(0, 10, 10);
 camera.lookAt(0, 0, 0);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -318,10 +320,58 @@ if (typeof ResizeObserver !== 'undefined') {
   new ResizeObserver(() => resize()).observe(wrap);
 }
 
-scene.add(new THREE.HemisphereLight(0xffffff, 0x223311, 0.9));
-const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+const hemiLight = new THREE.HemisphereLight(0xffffff, 0x223311, 1.6);
+scene.add(hemiLight);
+const sun = new THREE.DirectionalLight(0xffffff, 1.3);
 sun.position.set(5, 10, 5);
 scene.add(sun);
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+scene.add(ambientLight);
+
+// --- Day/night cycle ---
+// A slow, looping sun orbit drives sky color, sun color/intensity, and both
+// ambient sources together so "morning" and "night" read as one coherent
+// lighting state rather than lights drifting independently. Height above
+// the horizon (sunHeight, -1..1) is the single source of truth everything
+// else derives from.
+const DAY_CYCLE_SECONDS = 180; // full morning -> noon -> night -> morning loop
+const SKY_DAY = new THREE.Color(0x8fc3e8);
+const SKY_NIGHT = new THREE.Color(0x0a0e1a);
+const SUN_COLOR_LOW = new THREE.Color(0xff9a56); // warm sunrise/sunset tint
+const SUN_COLOR_HIGH = new THREE.Color(0xffffff); // midday white
+const HEMI_SKY_DAY = new THREE.Color(0xffffff);
+const HEMI_SKY_NIGHT = new THREE.Color(0x1a2240);
+const HEMI_GROUND_DAY = new THREE.Color(0x223311);
+const HEMI_GROUND_NIGHT = new THREE.Color(0x080a10);
+let cycleTime = DAY_CYCLE_SECONDS * 0.18; // start mid-morning, sun climbing
+
+const tmpSunColor = new THREE.Color();
+const tmpSkyColor = new THREE.Color();
+const tmpHemiSky = new THREE.Color();
+const tmpHemiGround = new THREE.Color();
+
+function updateDayNightCycle(delta) {
+  cycleTime = (cycleTime + delta) % DAY_CYCLE_SECONDS;
+  const angle = (cycleTime / DAY_CYCLE_SECONDS) * Math.PI * 2;
+  const sunHeight = Math.sin(angle); // -1 (midnight) .. 1 (noon)
+  const dayFactor = THREE.MathUtils.clamp(sunHeight, 0, 1);
+
+  sun.position.set(Math.cos(angle) * 20, sunHeight * 20, 8);
+  sun.intensity = THREE.MathUtils.lerp(0.05, 1.4, dayFactor);
+  tmpSunColor.lerpColors(SUN_COLOR_LOW, SUN_COLOR_HIGH, Math.sqrt(dayFactor));
+  sun.color.copy(tmpSunColor);
+
+  tmpSkyColor.lerpColors(SKY_NIGHT, SKY_DAY, dayFactor);
+  scene.background = tmpSkyColor.clone();
+
+  hemiLight.intensity = THREE.MathUtils.lerp(0.25, 1.6, dayFactor);
+  tmpHemiSky.lerpColors(HEMI_SKY_NIGHT, HEMI_SKY_DAY, dayFactor);
+  tmpHemiGround.lerpColors(HEMI_GROUND_NIGHT, HEMI_GROUND_DAY, dayFactor);
+  hemiLight.color.copy(tmpHemiSky);
+  hemiLight.groundColor.copy(tmpHemiGround);
+
+  ambientLight.intensity = THREE.MathUtils.lerp(0.05, 0.4, dayFactor);
+}
 
 // --- Tile stage -> appearance ---
 const STAGE_COLOR = {
@@ -429,10 +479,100 @@ const STAGE_MODEL_SIZE = {
   grown: 0.95,
 };
 
+// Mirrors server/server.js GROWTH_MS/WILT_MS. No shared module between
+// client and server in this project (plain ESM served statically, no
+// bundler) — these only drive the client's own countdown display, the
+// server remains the sole authority on when a tile actually flips stage.
+const GROWTH_MS = 75_000; // watered -> grown
+const WILT_MS = 45_000; // planted -> wilts back to tilled if not watered in time
+
 const tileGroup = new THREE.Group();
 scene.add(tileGroup);
 
 const tileMeshes = new Map(); // "x,y" -> { soilMesh, cropMesh, pendingToken }
+const knownTiles = new Map(); // "x,y" -> latest tile object, for the 1s status-icon countdown tick
+const tileStatusIcons = new Map(); // "x,y" -> { sprite, canvas, ctx, texture }
+
+// A billboard sprite (always faces camera, no manual per-frame rotation
+// needed) drawn from a small canvas so it can show an emoji glyph plus a
+// live countdown/label without loading a dedicated icon atlas.
+function createStatusSprite() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(0.55, 0.55, 1);
+  sprite.renderOrder = 999; // always draw on top of tiles/crops, never gets hidden behind them
+  return { sprite, canvas, ctx, texture };
+}
+
+function drawStatusIcon({ ctx, canvas, texture }, glyph, label, color) {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '58px sans-serif';
+  ctx.fillText(glyph, canvas.width / 2, 50);
+  if (label) {
+    ctx.font = 'bold 26px sans-serif';
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+    ctx.strokeText(label, canvas.width / 2, 96);
+    ctx.fillStyle = color;
+    ctx.fillText(label, canvas.width / 2, 96);
+  }
+  texture.needsUpdate = true;
+}
+
+// What the icon over a tile should show right now, or null for stages that
+// don't need one (empty/tilled — nothing growing, nothing at risk).
+function statusForTile(tile) {
+  const now = Date.now();
+  if (tile.stage === 'grown') {
+    return { glyph: '✅', label: 'Ready!', color: '#8effa0' }; // checkmark
+  }
+  if (tile.stage === 'watered' && tile.wateredAt) {
+    const remainingS = Math.max(0, Math.ceil((GROWTH_MS - (now - tile.wateredAt)) / 1000));
+    return { glyph: '🌱', label: `${remainingS}s`, color: '#bfe3ff' }; // seedling
+  }
+  if (tile.stage === 'planted' && tile.plantedAt) {
+    const remainingS = Math.max(0, Math.ceil((WILT_MS - (now - tile.plantedAt)) / 1000));
+    const urgent = remainingS <= 15;
+    return { glyph: '💧', label: `${remainingS}s`, color: urgent ? '#ff6b6b' : '#ffd166' }; // droplet, reddens near wilt
+  }
+  return null;
+}
+
+function updateTileStatusIcon(tile) {
+  const key = tileKey(tile.x, tile.y);
+  const status = statusForTile(tile);
+  let entry = tileStatusIcons.get(key);
+  if (!status) {
+    if (entry) {
+      scene.remove(entry.sprite);
+      tileStatusIcons.delete(key);
+    }
+    return;
+  }
+  if (!entry) {
+    entry = createStatusSprite();
+    const [wx, wz] = worldPos(tile.x, tile.y);
+    entry.sprite.position.set(wx, 0.85, wz);
+    scene.add(entry.sprite);
+    tileStatusIcons.set(key, entry);
+  }
+  drawStatusIcon(entry, status.glyph, status.label, status.color);
+}
+
+// Countdown text needs to tick down even when nothing about the tile has
+// changed server-side (applyTile only runs on an actual stage/timestamp
+// update) — a 1s interval is plenty for a seconds-resolution timer and
+// far cheaper than redrawing every canvas every render frame.
+setInterval(() => {
+  knownTiles.forEach(updateTileStatusIcon);
+}, 1000);
 
 function tileKey(x, y) {
   return `${x},${y}`;
@@ -447,6 +587,9 @@ function worldPos(x, y) {
 function buildGrid(size) {
   tileGroup.clear();
   tileMeshes.clear();
+  knownTiles.clear();
+  tileStatusIcons.forEach((entry) => scene.remove(entry.sprite));
+  tileStatusIcons.clear();
   gridSize = size;
   const soilGeo = new THREE.BoxGeometry(TILE_SIZE, 0.15, TILE_SIZE);
   for (let y = 0; y < size; y++) {
@@ -467,6 +610,8 @@ function applyTile(tile) {
   const entry = tileMeshes.get(tileKey(tile.x, tile.y));
   if (!entry) return;
   entry.soilMesh.material.color.setHex(STAGE_COLOR[tile.stage] ?? STAGE_COLOR.empty);
+  knownTiles.set(tileKey(tile.x, tile.y), tile);
+  updateTileStatusIcon(tile);
 
   // A co-op partner acting on the hint tile before the local player does is
   // itself the teaching moment ("oh, that's how it works") — clear the hint
@@ -542,6 +687,18 @@ const playerAvatars = new Map(); // socket.id -> { object3D, mixer, modelName }
 const mixers = []; // flat list of active AnimationMixers, updated every frame
 let nextAvatarModelIndex = 0;
 
+// Every avatar's very first spawn (page load / login) starts here — top-
+// middle, just past the back fence line — instead of snapping straight
+// onto whatever tile the player last acted on. That first walk-in is what
+// establishes "this character walks to tiles" as soon as a player arrives,
+// rather than the first thing they see being a teleport. Re-derived from
+// gridSize (not baked in) so it still lands just past the fence at any plot
+// size.
+function avatarSpawnOrigin() {
+  const gridReach = gridHalfExtent();
+  return [0, -(gridReach + 1.4)];
+}
+
 // Player avatars are skinned meshes (bone hierarchy + skin weights); a
 // plain Object3D.clone(true) does NOT correctly rebind SkinnedMesh bones to
 // their cloned skeleton (a well-known Three.js gotcha), unlike the static
@@ -577,7 +734,8 @@ async function spawnAvatarForPlayer(playerId) {
     // clearly readable top-down (it's still the tallest thing on a tile)
     // without fully occluding the tile it's standing on.
     const groundY = normalizeToSize(object3D, 0.55);
-    object3D.position.set(0, groundY, 0); // parked at origin until a tile action places it
+    const [originX, originZ] = avatarSpawnOrigin();
+    object3D.position.set(originX, groundY, originZ); // parked at the top-middle spawn point until a tile action places it
     object3D.visible = false; // hidden until we know a real tile to place it on
 
     let mixer = null;
@@ -604,13 +762,13 @@ async function spawnAvatarForPlayer(playerId) {
       idleAction,
       walkAction,
       tileKey: null, // "x,y" of the tile this avatar is currently placed on, for move detection
-      walkTimeout: null,
-      // Target world position for this frame's interpolation, and whether
-      // we've ever placed this avatar yet (first placement should snap, not
-      // walk in from the origin parking spot).
+      isWalking: false, // driven off actual remaining travel distance in animate(), not a guessed timeout
+      // Target world position for this frame's interpolation. Every
+      // placement (including the very first one) now walks in from wherever
+      // the avatar currently is — see avatarSpawnOrigin() for where that
+      // starts on login.
       targetX: object3D.position.x,
       targetZ: object3D.position.z,
-      hasBeenPlaced: false,
     });
   } catch (err) {
     console.error(`[assets] failed to load player avatar "${modelName}"`, err);
@@ -626,7 +784,6 @@ function removeAvatarForPlayer(playerId) {
       const idx = mixers.indexOf(avatar.mixer);
       if (idx !== -1) mixers.splice(idx, 1);
     }
-    if (avatar.walkTimeout) clearTimeout(avatar.walkTimeout);
   }
   playerAvatars.delete(playerId);
 }
@@ -643,35 +800,17 @@ function placeAvatarOnTile(playerId, x, y) {
   const avatar = playerAvatars.get(playerId);
   if (!avatar?.object3D) return; // still loading, or never spawned (e.g. self before roomState)
   const key = tileKey(x, y);
-  const moved = avatar.tileKey !== null && avatar.tileKey !== key;
   avatar.tileKey = key;
   const [wx, wz] = worldPos(x, y);
   avatar.targetX = wx;
   avatar.targetZ = wz + AVATAR_TILE_EDGE_OFFSET;
   avatar.object3D.visible = true;
-  // First placement (avatar was parked at the origin, invisible) should snap
-  // straight to its tile rather than visibly sliding in from (0,0) the
-  // instant it appears; every placement after that interpolates smoothly in
-  // the render loop below instead of teleporting frame-to-frame.
-  if (!avatar.hasBeenPlaced) {
-    avatar.object3D.position.x = wx;
-    avatar.object3D.position.z = avatar.targetZ;
-    avatar.hasBeenPlaced = true;
-  }
-
-  // Sell a moment of "walking" whenever the avatar actually changes tiles
-  // (not on the very first placement, and not on repeat actions on the same
-  // tile) — this is a snap-to-tile position update, not continuous
-  // locomotion, so a real walk cycle synced to travel isn't available; a
-  // brief crossfade is the honest amount of motion this data supports.
-  if (moved && avatar.walkAction && avatar.idleAction) {
-    if (avatar.walkTimeout) clearTimeout(avatar.walkTimeout);
-    avatar.idleAction.crossFadeTo(avatar.walkAction.reset().play(), 0.15, false);
-    avatar.walkTimeout = setTimeout(() => {
-      avatar.walkAction.crossFadeTo(avatar.idleAction.reset().play(), 0.25, false);
-      avatar.walkTimeout = null;
-    }, 500);
-  }
+  // Every placement — including the very first one, walking in from
+  // avatarSpawnOrigin() — now interpolates in the render loop below instead
+  // of snapping. The walk/idle animation crossfade is driven off actual
+  // remaining distance each frame (see animate()), not fired here, so it
+  // stays in sync with travel that can vary in length (a fresh login walk-in
+  // is much farther than a one-tile step).
 }
 
 // --- Static scene dressing (barn + fence line), loaded once real state arrives ---
@@ -732,6 +871,113 @@ async function addStaticProps() {
   }
 
   await buildFenceLine(half);
+  await buildEnvironmentDecor();
+}
+
+// --- Ambient scenery (Cube World environment props, free decoration) ---
+// Unlike the barn/fence/well/windmill above, these aren't gameplay-relevant
+// or purchasable — just trees/rocks/flowers/bamboo/crystals scattered along
+// the grid's open side edges (the fence line already dresses the back edge)
+// to make the world feel less like tiles floating in a void. Positions are
+// derived from a fixed seed (mulberry32) so every client renders the same
+// layout without needing server sync, and re-derived from gridSize on every
+// roomState so plot expansion pushes decor outward instead of leaving it to
+// clip into newly-added tiles.
+function mulberry32(seed) {
+  return () => {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const DECOR_TYPES = [
+  { model: 'env_tree_1', maxDim: 1.6 },
+  { model: 'env_tree_2', maxDim: 1.6 },
+  { model: 'env_tree_3', maxDim: 1.8 },
+  { model: 'env_rock_1', maxDim: 0.6 },
+  { model: 'env_rock_2', maxDim: 0.7 },
+  { model: 'env_flowers_1', maxDim: 0.4 },
+  { model: 'env_flowers_2', maxDim: 0.4 },
+  { model: 'env_bamboo_small', maxDim: 0.8 },
+  { model: 'env_bamboo_mid', maxDim: 1.1 },
+  { model: 'env_crystal', maxDim: 0.9 },
+];
+const DECOR_PER_SIDE = 6; // per left/right edge
+const DECOR_FRONT_COUNT = 4; // low-profile cluster near the camera-facing edge
+
+// Each slot's type + jitter is picked once (seeded) and reused across
+// repositionDecor() calls, so decor doesn't visually shuffle every time the
+// grid resizes — only its distance from the grid changes.
+const decorSlots = []; // { typeIndex, side: 'left'|'right'|'front', t (0..1 along edge), jitter }
+const decorObjects = []; // parallel THREE.Object3D once loaded, or null while loading
+let decorBuilt = false;
+
+function buildDecorSlots() {
+  const rand = mulberry32(20260730);
+  for (let i = 0; i < DECOR_PER_SIDE; i++) {
+    decorSlots.push({ typeIndex: Math.floor(rand() * DECOR_TYPES.length), side: 'left', t: (i + 0.5) / DECOR_PER_SIDE, jitter: (rand() - 0.5) * 0.5 });
+    decorSlots.push({ typeIndex: Math.floor(rand() * DECOR_TYPES.length), side: 'right', t: (i + 0.5) / DECOR_PER_SIDE, jitter: (rand() - 0.5) * 0.5 });
+  }
+  // Front cluster is restricted to low, camera-friendly types (rocks/flowers/
+  // bamboo, no trees) so it frames the grid instead of blocking it.
+  const lowTypeIndices = DECOR_TYPES.reduce((acc, t, idx) => (t.maxDim <= 1.1 ? [...acc, idx] : acc), []);
+  for (let i = 0; i < DECOR_FRONT_COUNT; i++) {
+    decorSlots.push({
+      typeIndex: lowTypeIndices[Math.floor(rand() * lowTypeIndices.length)],
+      side: 'front',
+      t: (i + 0.5) / DECOR_FRONT_COUNT,
+      jitter: (rand() - 0.5) * 0.5,
+    });
+  }
+}
+
+function positionDecorObject(index) {
+  const object = decorObjects[index];
+  if (!object) return;
+  const slot = decorSlots[index];
+  const gridReach = gridHalfExtent();
+  const sideGap = 0.9;
+  const frontGap = 1.6; // clears the well/windmill/barn corner offsets
+  const span = gridReach * 2;
+  if (slot.side === 'left' || slot.side === 'right') {
+    const x = (slot.side === 'left' ? -1 : 1) * (gridReach + sideGap);
+    const z = -gridReach + slot.t * span + slot.jitter;
+    object.position.set(x, object.position.y, z);
+  } else {
+    const x = -gridReach + slot.t * span + slot.jitter;
+    const z = gridReach + frontGap;
+    object.position.set(x, object.position.y, z);
+  }
+}
+
+async function buildEnvironmentDecor() {
+  if (decorBuilt) return;
+  decorBuilt = true;
+  buildDecorSlots();
+  await Promise.all(
+    decorSlots.map(async (slot, index) => {
+      const type = DECOR_TYPES[slot.typeIndex];
+      try {
+        const template = await loadModel(type.model);
+        const object = template.clone(true);
+        const groundY = normalizeToSize(object, type.maxDim);
+        object.rotation.y = slot.jitter * Math.PI; // cheap variety so clones of the same prop don't look identical
+        object.position.y = groundY;
+        decorObjects[index] = object;
+        positionDecorObject(index);
+        scene.add(object);
+      } catch (err) {
+        console.error(`[assets] failed to load decor "${type.model}"`, err);
+      }
+    })
+  );
+}
+
+function repositionDecor() {
+  decorObjects.forEach((_, index) => positionDecorObject(index));
 }
 
 // --- Cosmetic gold-sink props (purchased, purely decorative) ---
@@ -1007,6 +1253,7 @@ socket.on('roomState', (room) => {
   addStaticProps(); // no-op after first call; still repositions the barn below
   positionBarn(); // gridSize may have changed (e.g. plot expansion) — re-derive the barn's offset
   repositionCosmeticProps(); // same gridSize-changed concern as the barn above
+  repositionDecor(); // same gridSize-changed concern as the barn/cosmetics above
 
   const overlay = document.getElementById('cold-start-overlay');
   if (overlay) overlay.remove();
@@ -1087,23 +1334,43 @@ const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
   const delta = clock.getDelta();
+  updateDayNightCycle(delta);
   mixers.forEach((mixer) => mixer.update(delta));
   // Interpolate each avatar toward its target tile position instead of
-  // snapping in placeAvatarOnTile(), so a tile-to-tile move reads as a walk
-  // rather than a teleport. Frame-rate independent (exponential decay driven
-  // by delta, not a fixed per-frame step) so it looks the same at 30fps or
+  // snapping in placeAvatarOnTile(), so every move — including the very
+  // first login walk-in from avatarSpawnOrigin() — reads as a walk rather
+  // than a teleport. Frame-rate independent (exponential decay driven by
+  // delta, not a fixed per-frame step) so it looks the same at 30fps or
   // 144fps. AVATAR_MOVE_SPEED is a decay-rate constant, not a literal
-  // units/sec speed, but larger = faster convergence.
-  const AVATAR_MOVE_SPEED = 8;
+  // units/sec speed; lower than the old value (8) so a step is visibly
+  // traversed instead of snapping shut in ~1 frame at high framerates.
+  const AVATAR_MOVE_SPEED = 4.5;
+  const ARRIVE_EPSILON = 0.015;
   playerAvatars.forEach((avatar) => {
     if (!avatar?.object3D) return;
     const pos = avatar.object3D.position;
     const dx = avatar.targetX - pos.x;
     const dz = avatar.targetZ - pos.z;
-    if (Math.abs(dx) < 0.001 && Math.abs(dz) < 0.001) return;
-    const t = 1 - Math.exp(-AVATAR_MOVE_SPEED * delta);
-    pos.x += dx * t;
-    pos.z += dz * t;
+    const dist = Math.hypot(dx, dz);
+    if (dist > ARRIVE_EPSILON) {
+      const t = 1 - Math.exp(-AVATAR_MOVE_SPEED * delta);
+      pos.x += dx * t;
+      pos.z += dz * t;
+      // Face the direction of travel — a straight-on slide with no turn is
+      // what reads as "gliding" rather than "walking" even once the motion
+      // itself is smooth.
+      const heading = Math.atan2(dx, dz);
+      let angleDiff = heading - avatar.object3D.rotation.y;
+      angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff)); // shortest-path wrap
+      avatar.object3D.rotation.y += angleDiff * Math.min(1, 10 * delta);
+      if (!avatar.isWalking && avatar.walkAction && avatar.idleAction) {
+        avatar.isWalking = true;
+        avatar.idleAction.crossFadeTo(avatar.walkAction.reset().play(), 0.15, false);
+      }
+    } else if (avatar.isWalking && avatar.walkAction && avatar.idleAction) {
+      avatar.isWalking = false;
+      avatar.walkAction.crossFadeTo(avatar.idleAction.reset().play(), 0.25, false);
+    }
   });
   if (hintRing) {
     const t = (performance.now() - hintRingStart) / 1000;
