@@ -25,17 +25,21 @@ function savePath(roomId) {
   return path.join(SAVE_DIR, `${roomId}.json`);
 }
 
-function loadTiles(roomId) {
+function loadRoomSave(roomId) {
   try {
     const raw = fs.readFileSync(savePath(roomId), 'utf-8');
     const saved = JSON.parse(raw);
+    const result = {};
     if (Array.isArray(saved.tiles) && saved.tiles.length === GRID_SIZE * GRID_SIZE) {
-      return saved.tiles;
+      result.tiles = saved.tiles;
     }
+    if (typeof saved.wallet === 'number') result.wallet = saved.wallet;
+    if (saved.inventory && typeof saved.inventory === 'object') result.inventory = saved.inventory;
+    return result;
   } catch {
-    // no save yet, or unreadable/stale — fall through to a fresh grid
+    // no save yet, or unreadable/stale — fall through to fresh defaults
+    return {};
   }
-  return null;
 }
 
 // Fire-and-forget write, coalesced per room so a burst of actions/growth
@@ -46,7 +50,7 @@ function saveRoomSoon(room) {
   pendingSaves.add(room.id);
   setImmediate(() => {
     pendingSaves.delete(room.id);
-    const payload = JSON.stringify({ tiles: room.tiles, savedAt: Date.now() });
+    const payload = JSON.stringify({ tiles: room.tiles, wallet: room.wallet, inventory: room.inventory, savedAt: Date.now() });
     fs.writeFile(savePath(room.id), payload, (err) => {
       if (err) console.error(`[save] failed for room ${room.id}:`, err.message);
     });
@@ -67,6 +71,22 @@ const GRID_SIZE = 6;
 const GROWTH_MS = 75_000;
 const WILT_MS = 45_000;
 const GROWTH_TICK_MS = 1000;
+
+// --- Economy (2026-07-30) ---
+// Only one crop exists in assets today (wheat) — CROP_TYPE is a single
+// constant rather than a per-tile field so multi-crop can slot in later
+// (assets.json + a per-tile cropType) without touching this economy layer.
+// Numbers: seed cost is charged *at plant time* (not at harvest), so the
+// existing 45s wilt mechanic — previously just a time/re-till cost — now
+// also carries a real gold stake. Sell price is 2x seed cost, matching the
+// rough seed:produce markup Stardew Valley uses for wheat (10g seed / 25g
+// crop, ~2.5x) — a starting wallet of 20g affords ~6 plantings before a
+// player must sell, enough to learn the loop without instant bankruptcy,
+// but not so much that a bad run (wilted crops) is inconsequential.
+const CROP_TYPE = 'wheat';
+const SEED_COST = 3; // gold, deducted on successful `plant`
+const SELL_PRICE = 6; // gold per harvested crop, realized via `sell`
+const STARTING_WALLET = 20;
 
 // Tile lifecycle: empty -> tilled -> planted -> watered (growing) -> grown -> (harvest) -> tilled
 //                                       \-> (wilts if unwatered too long) -> tilled
@@ -99,9 +119,9 @@ const ACTION_VERB_PAST = {
 };
 
 function createRoom(id) {
-  const savedTiles = loadTiles(id);
-  const tiles = savedTiles ?? [];
-  if (!savedTiles) {
+  const save = loadRoomSave(id);
+  const tiles = save.tiles ?? [];
+  if (!save.tiles) {
     for (let y = 0; y < GRID_SIZE; y++) {
       for (let x = 0; x < GRID_SIZE; x++) {
         tiles.push(createTile(x, y));
@@ -112,6 +132,8 @@ function createRoom(id) {
     id,
     players: new Map(), // socket.id -> { id, name }
     tiles,
+    wallet: save.wallet ?? STARTING_WALLET,
+    inventory: save.inventory ?? { [CROP_TYPE]: 0 }, // harvested-but-unsold crops
   };
 }
 
@@ -136,6 +158,10 @@ function publicRoomState(room) {
     maxPlayers: MAX_PLAYERS,
     players: [...room.players.values()],
     tiles: room.tiles,
+    wallet: room.wallet,
+    inventory: room.inventory,
+    sellPrice: SELL_PRICE,
+    seedCost: SEED_COST,
   };
 }
 
@@ -174,10 +200,10 @@ function applyAction(room, action, playerId) {
     return { ok: false, message, tile };
   }
 
-  function accept() {
+  function accept(extra) {
     tile.lastActionAt = Date.now();
     tile.lastActionBy = playerId;
-    return { ok: true, tile };
+    return { ok: true, tile, ...extra };
   }
 
   switch (type) {
@@ -188,9 +214,18 @@ function applyAction(room, action, playerId) {
 
     case 'plant':
       if (tile.stage !== 'tilled') return reject('Tile must be tilled first.');
+      // Seed cost is charged here, at plant time, not at harvest — this is
+      // what gives the existing wilt mechanic a real economic stake instead
+      // of just a time cost. Shared wallet: whoever plants pays for the
+      // whole room's farm, by design (GDD: "one wallet — success depends on
+      // both players contributing").
+      if (room.wallet < SEED_COST) {
+        return reject(`Not enough gold for seed (need ${SEED_COST}g, have ${room.wallet}g).`);
+      }
+      room.wallet -= SEED_COST;
       tile.stage = 'planted';
       tile.plantedAt = Date.now();
-      return accept();
+      return accept({ economyChanged: true });
 
     case 'water':
       if (tile.stage !== 'planted') return reject('Nothing to water here.');
@@ -203,7 +238,14 @@ function applyAction(room, action, playerId) {
       tile.stage = 'tilled'; // soil stays tilled, ready to replant
       tile.plantedAt = null;
       tile.wateredAt = null;
-      return accept();
+      // Harvest adds to a shared crop inventory rather than gold directly —
+      // "Sell All" (a separate action) is the cash-out step, per the GDD's
+      // literal phrasing ("a flat sell-all-for-gold action is enough").
+      // This also gives harvesting its own satisfying feedback (a crop
+      // counter ticking up) independent of the sell decision, and lets
+      // players stockpile a few harvests before bothering to sell.
+      room.inventory[CROP_TYPE] = (room.inventory[CROP_TYPE] ?? 0) + 1;
+      return accept({ economyChanged: true });
 
     default:
       return { ok: false, message: `Unknown action type: ${type}` };
@@ -279,6 +321,25 @@ io.on('connection', (socket) => {
       return tileError(room, socket, result.message, result.tile, action.type);
     }
     io.to(room.id).emit('tilesUpdated', [result.tile]);
+    if (result.economyChanged) {
+      io.to(room.id).emit('economyUpdate', { wallet: room.wallet, inventory: room.inventory });
+    }
+    saveRoomSoon(room);
+  });
+
+  // "Sell All" — the GDD's flat, shop-UI-less cash-out step. Converts the
+  // whole shared inventory to gold at once; no per-crop selection since
+  // there's nothing to choose between yet (one crop type).
+  socket.on('sell', () => {
+    const count = room.inventory[CROP_TYPE] ?? 0;
+    if (count <= 0) {
+      socket.emit('actionRejected', { message: 'Nothing to sell yet.', collision: false });
+      return;
+    }
+    const earned = count * SELL_PRICE;
+    room.inventory[CROP_TYPE] = 0;
+    room.wallet += earned;
+    io.to(room.id).emit('economyUpdate', { wallet: room.wallet, inventory: room.inventory, lastSale: { count, earned } });
     saveRoomSoon(room);
   });
 

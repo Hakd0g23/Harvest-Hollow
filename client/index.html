@@ -79,6 +79,24 @@
   #toast.toast--collision {
     background: rgba(60, 110, 150, 0.92);
   }
+  /* Sell confirmations read as good news, not an error/collision — same
+     variant-modifier pattern as toast--collision, just a third color. */
+  #toast.toast--success {
+    background: rgba(70, 140, 60, 0.92);
+  }
+  #economy {
+    font-size: 12px;
+    color: #f0e2a0;
+    white-space: nowrap;
+  }
+  #sell-btn {
+    background: #5a4a1e;
+    border: 1px solid #c9a227;
+    color: #f7e8b0;
+  }
+  #sell-btn.active-hint {
+    /* no-op placeholder kept minimal; sell has no "active tool" state */
+  }
 
   /* Narrow / phone-sized viewport: HUD stacks, buttons get real 44px+ tap
      targets (Apple/WCAG touch-target guidance), canvas gets breathing room
@@ -114,6 +132,8 @@
     <button class="tool-btn" data-tool="plant">Plant</button>
     <button class="tool-btn" data-tool="water">Water</button>
     <button class="tool-btn" data-tool="harvest">Harvest</button>
+    <button id="sell-btn" class="tool-btn" type="button">Sell All</button>
+    <span id="economy">Gold: -- | Wheat: --</span>
     <span id="status">connecting...</span>
   </div>
   <div id="canvas-wrap"></div>

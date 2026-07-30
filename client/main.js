@@ -24,15 +24,25 @@ const TOOLS = ['till', 'plant', 'water', 'harvest'];
 let activeTool = 'till';
 
 const statusEl = document.getElementById('status');
+const economyEl = document.getElementById('economy');
+const sellBtn = document.getElementById('sell-btn');
 const toastEl = document.getElementById('toast');
 let toastTimer = null;
 function showToast(message, variant = 'error') {
   toastEl.textContent = message;
   toastEl.classList.toggle('toast--collision', variant === 'collision');
+  toastEl.classList.toggle('toast--success', variant === 'success');
   toastEl.style.display = 'block';
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (toastEl.style.display = 'none'), 2000);
 }
+
+function renderEconomy(wallet, inventory) {
+  const wheat = inventory?.wheat ?? 0;
+  economyEl.textContent = `Gold: ${wallet} | Wheat: ${wheat}`;
+}
+
+sellBtn.addEventListener('click', () => socket.emit('sell'));
 
 document.querySelectorAll('.tool-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
@@ -390,7 +400,15 @@ socket.on('roomState', (room) => {
   room.tiles.forEach(applyTile);
   maxPlayers = room.maxPlayers;
   statusEl.textContent = `connected — ${room.players.length}/${maxPlayers} players`;
+  renderEconomy(room.wallet, room.inventory);
   addStaticProps(); // no-op after first call
+});
+
+socket.on('economyUpdate', ({ wallet, inventory, lastSale }) => {
+  renderEconomy(wallet, inventory);
+  if (lastSale) {
+    showToast(`Sold ${lastSale.count} wheat for ${lastSale.earned}g!`, 'success');
+  }
 });
 
 socket.on('playerJoined', () => {
