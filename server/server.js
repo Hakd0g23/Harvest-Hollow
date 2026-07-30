@@ -87,13 +87,13 @@ const MAX_PLAYERS = 6; // solo-primary; up to 6 helpers can join the same farm
 // Gold-sink pass: the sell-for-gold loop previously had nothing to spend
 // gold on. Both upgrades are per-room (shared wallet), matching the
 // existing "one wallet" co-op design — not per-player purchases.
-const DEFAULT_GRID_SIZE = 6;
-const GRID_TIERS = [6, 8, 10, 12]; // +2/side per tier, capped at 12x12
-const GRID_EXPAND_COST = { 6: 240, 8: 560, 10: 1100 }; // keyed by *current* gridSize -> cost to reach next tier
+export const DEFAULT_GRID_SIZE = 6;
+export const GRID_TIERS = [6, 8, 10, 12]; // +2/side per tier, capped at 12x12
+export const GRID_EXPAND_COST = { 6: 240, 8: 560, 10: 1100 }; // keyed by *current* gridSize -> cost to reach next tier
 
-const TOOL_TIERS = [0, 1, 2]; // 0 = 1x1 (unchanged), 1 = 3x3, 2 = 5x5 — till/water/harvest only, not plant
-const TOOL_UPGRADE_COST = { 0: 300, 1: 900 }; // keyed by *current* toolTier -> cost to reach next tier
-const TOOL_RADIUS = { 0: 0, 1: 1, 2: 2 }; // Chebyshev radius around the clicked tile
+export const TOOL_TIERS = [0, 1, 2]; // 0 = 1x1 (unchanged), 1 = 3x3, 2 = 5x5 — till/water/harvest only, not plant
+export const TOOL_UPGRADE_COST = { 0: 300, 1: 900 }; // keyed by *current* toolTier -> cost to reach next tier
+export const TOOL_RADIUS = { 0: 0, 1: 1, 2: 2 }; // Chebyshev radius around the clicked tile
 
 // --- Cosmetic gold sink (2026-07-30) ---
 // Purely visual, no gameplay effect whatsoever — a second thing to spend
@@ -106,7 +106,7 @@ const TOOL_RADIUS = { 0: 0, 1: 1, 2: 2 }; // Chebyshev radius around the clicked
 // sourcing anything new: Fence2 (an alternate fence style, i.e. the
 // "paint the fence" ask), Well, and Windmill are all decorative props
 // with zero gameplay hookup elsewhere in server.js.
-const COSMETICS = {
+export const COSMETICS = {
   fenceStyle: { cost: 120, label: 'Painted Fence' },
   well: { cost: 180, label: 'Well' },
   windmill: { cost: 260, label: 'Windmill' },
@@ -116,8 +116,8 @@ const COSMETICS = {
 // "who tills, who waters, who harvests" coordination pitch). 75s from
 // watered to grown; a planted-but-unwatered tile wilts (loses its seed,
 // reverts to tilled) after 45s so sloppy coordination has a real cost.
-const GROWTH_MS = 75_000;
-const WILT_MS = 45_000;
+export const GROWTH_MS = 75_000;
+export const WILT_MS = 45_000;
 const GROWTH_TICK_MS = 1000;
 
 // --- Economy (2026-07-30) ---
@@ -131,14 +131,14 @@ const GROWTH_TICK_MS = 1000;
 // crop, ~2.5x) — a starting wallet of 20g affords ~6 plantings before a
 // player must sell, enough to learn the loop without instant bankruptcy,
 // but not so much that a bad run (wilted crops) is inconsequential.
-const CROP_TYPE = 'wheat';
-const SEED_COST = 3; // gold, deducted on successful `plant`
-const SELL_PRICE = 6; // gold per harvested crop, realized via `sell`
-const STARTING_WALLET = 20;
+export const CROP_TYPE = 'wheat';
+export const SEED_COST = 3; // gold, deducted on successful `plant`
+export const SELL_PRICE = 6; // gold per harvested crop, realized via `sell`
+export const STARTING_WALLET = 20;
 
 // Tile lifecycle: empty -> tilled -> planted -> watered (growing) -> grown -> (harvest) -> tilled
 //                                       \-> (wilts if unwatered too long) -> tilled
-function createTile(x, y) {
+export function createTile(x, y) {
   return {
     x,
     y,
@@ -166,7 +166,7 @@ const ACTION_VERB_PAST = {
   harvest: 'harvested',
 };
 
-function createRoom(id) {
+export function createRoom(id) {
   const save = loadRoomSave(id);
   const gridSize = save.gridSize ?? DEFAULT_GRID_SIZE;
   const tiles = save.tiles ?? [];
@@ -192,30 +192,30 @@ function createRoom(id) {
 // Multiple concurrent rooms, created on demand from a client-supplied room
 // code (?room=xyz in the URL, per the GDD's invite-link join flow) instead
 // of one hardcoded shared room.
-const rooms = new Map();
+export const rooms = new Map();
 
-function getOrCreateRoom(id) {
+export function getOrCreateRoom(id) {
   if (!rooms.has(id)) rooms.set(id, createRoom(id));
   return rooms.get(id);
 }
 
-function getTile(room, x, y) {
+export function getTile(room, x, y) {
   return room.tiles.find((t) => t.x === x && t.y === y);
 }
 
-function nextGridTier(size) {
+export function nextGridTier(size) {
   const idx = GRID_TIERS.indexOf(size);
   if (idx === -1 || idx === GRID_TIERS.length - 1) return null;
   return GRID_TIERS[idx + 1];
 }
 
-function nextToolTier(tier) {
+export function nextToolTier(tier) {
   const idx = TOOL_TIERS.indexOf(tier);
   if (idx === -1 || idx === TOOL_TIERS.length - 1) return null;
   return TOOL_TIERS[idx + 1];
 }
 
-function publicRoomState(room) {
+export function publicRoomState(room) {
   return {
     id: room.id,
     gridSize: room.gridSize,
@@ -262,7 +262,7 @@ function tileError(room, socket, message, tile, actionType) {
 // Single-tile stage transition for one action type. Shared by both the
 // plain (radius-0) path and the tool-radius path below so tier-0 behavior
 // (till/plant/water/harvest, one tile) is byte-for-byte unchanged.
-function applyToTile(room, tile, type, playerId) {
+export function applyToTile(room, tile, type, playerId) {
   function reject(message) {
     return { ok: false, message, tile };
   }
@@ -329,7 +329,7 @@ function applyToTile(room, tile, type, playerId) {
 // `planted`, never force-advancing neighbors in the wrong stage.
 const RADIUS_ACTIONS = new Set(['till', 'water', 'harvest']);
 
-function applyAction(room, action, playerId) {
+export function applyAction(room, action, playerId) {
   const { type, x, y } = action;
   const centerTile = getTile(room, x, y);
   if (!centerTile) return { ok: false, message: 'Tile out of bounds.' };
@@ -373,7 +373,7 @@ function applyAction(room, action, playerId) {
 // Growth tick: promote "watered" tiles past their timer to "grown", and
 // wilt "planted" tiles that sat unwatered too long back to "tilled" (loses
 // the seed) — the mechanism that gives coordination real stakes.
-function growthTick(io) {
+export function growthTick(io) {
   for (const room of rooms.values()) {
     const now = Date.now();
     let changed = [];
@@ -405,12 +405,12 @@ const corsOptions = allowedOrigins.length
   ? { origin: allowedOrigins }
   : { origin: '*' };
 
-const app = express();
+export const app = express();
 app.use(cors(corsOptions));
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
-const server = http.createServer(app);
-const io = new Server(server, {
+export const server = http.createServer(app);
+export const io = new Server(server, {
   cors: corsOptions,
 });
 
@@ -428,6 +428,98 @@ function sanitizeRoomId(raw) {
 
 function generateRoomId() {
   return Math.random().toString(36).slice(2, 8);
+}
+
+// --- Pure per-room mutators for the four gold-sink/economy socket events ---
+// Each takes the room object, mutates it in place on success, and returns
+// { ok: true, ...extra } or { ok: false, message }. Kept side-effect-free
+// w.r.t. sockets/io (no emits, no saves) so they're unit-testable without a
+// live connection; the socket handlers above just translate the result into
+// the same emits/rejections they always sent.
+
+export function expandPlotOnRoom(room) {
+  const newSize = nextGridTier(room.gridSize);
+  if (newSize === null) {
+    return { ok: false, message: 'Plot is already at max size.' };
+  }
+  const cost = GRID_EXPAND_COST[room.gridSize];
+  if (room.wallet < cost) {
+    return { ok: false, message: `Not enough gold to expand (need ${cost}g, have ${room.wallet}g).` };
+  }
+  room.wallet -= cost;
+  const oldTiles = room.tiles;
+  const oldSize = room.gridSize;
+  const grow = (newSize - oldSize) / 2; // tiles added on each side
+  const newTiles = [];
+  for (let y = 0; y < newSize; y++) {
+    for (let x = 0; x < newSize; x++) {
+      const oldX = x - grow;
+      const oldY = y - grow;
+      const existing =
+        oldX >= 0 && oldX < oldSize && oldY >= 0 && oldY < oldSize
+          ? oldTiles.find((t) => t.x === oldX && t.y === oldY)
+          : null;
+      if (existing) {
+        // Re-key to the new grid's coordinate space; state is preserved.
+        newTiles.push({ ...existing, x, y });
+      } else {
+        newTiles.push(createTile(x, y));
+      }
+    }
+  }
+  room.gridSize = newSize;
+  room.tiles = newTiles;
+  // Re-key player positions the same way tiles above were re-keyed (shift
+  // by `grow` on each axis) so an expansion doesn't strand a player's
+  // avatar at stale coordinates in the new, larger grid space.
+  for (const p of room.players.values()) {
+    if (p.x !== null && p.y !== null) {
+      p.x += grow;
+      p.y += grow;
+    }
+  }
+  return { ok: true, gridSize: newSize };
+}
+
+export function upgradeToolOnRoom(room) {
+  const newTier = nextToolTier(room.toolTier);
+  if (newTier === null) {
+    return { ok: false, message: 'Tool is already at max tier.' };
+  }
+  const cost = TOOL_UPGRADE_COST[room.toolTier];
+  if (room.wallet < cost) {
+    return { ok: false, message: `Not enough gold to upgrade (need ${cost}g, have ${room.wallet}g).` };
+  }
+  room.wallet -= cost;
+  room.toolTier = newTier;
+  return { ok: true, toolTier: newTier };
+}
+
+export function buyCosmeticOnRoom(room, id) {
+  const item = COSMETICS[id];
+  if (!item) {
+    return { ok: false, message: 'Unknown cosmetic item.' };
+  }
+  if (room.cosmetics[id]) {
+    return { ok: false, message: `${item.label} already purchased.` };
+  }
+  if (room.wallet < item.cost) {
+    return { ok: false, message: `Not enough gold for ${item.label} (need ${item.cost}g, have ${room.wallet}g).` };
+  }
+  room.wallet -= item.cost;
+  room.cosmetics[id] = true;
+  return { ok: true, item };
+}
+
+export function sellOnRoom(room) {
+  const count = room.inventory[CROP_TYPE] ?? 0;
+  if (count <= 0) {
+    return { ok: false, message: 'Nothing to sell yet.' };
+  }
+  const earned = count * SELL_PRICE;
+  room.inventory[CROP_TYPE] = 0;
+  room.wallet += earned;
+  return { ok: true, count, earned };
 }
 
 io.on('connection', (socket) => {
@@ -497,48 +589,9 @@ io.on('connection', (socket) => {
   // worldPos()'s ((x - offset) * step) centering on the client, so tiles
   // that were centered before an expansion don't visually jump.
   socket.on('expandPlot', () => {
-    const newSize = nextGridTier(room.gridSize);
-    if (newSize === null) {
-      return socket.emit('actionRejected', { message: 'Plot is already at max size.', collision: false });
-    }
-    const cost = GRID_EXPAND_COST[room.gridSize];
-    if (room.wallet < cost) {
-      return socket.emit('actionRejected', {
-        message: `Not enough gold to expand (need ${cost}g, have ${room.wallet}g).`,
-        collision: false,
-      });
-    }
-    room.wallet -= cost;
-    const oldTiles = room.tiles;
-    const oldSize = room.gridSize;
-    const grow = (newSize - oldSize) / 2; // tiles added on each side
-    const newTiles = [];
-    for (let y = 0; y < newSize; y++) {
-      for (let x = 0; x < newSize; x++) {
-        const oldX = x - grow;
-        const oldY = y - grow;
-        const existing =
-          oldX >= 0 && oldX < oldSize && oldY >= 0 && oldY < oldSize
-            ? oldTiles.find((t) => t.x === oldX && t.y === oldY)
-            : null;
-        if (existing) {
-          // Re-key to the new grid's coordinate space; state is preserved.
-          newTiles.push({ ...existing, x, y });
-        } else {
-          newTiles.push(createTile(x, y));
-        }
-      }
-    }
-    room.gridSize = newSize;
-    room.tiles = newTiles;
-    // Re-key player positions the same way tiles above were re-keyed (shift
-    // by `grow` on each axis) so an expansion doesn't strand a player's
-    // avatar at stale coordinates in the new, larger grid space.
-    for (const p of room.players.values()) {
-      if (p.x !== null && p.y !== null) {
-        p.x += grow;
-        p.y += grow;
-      }
+    const result = expandPlotOnRoom(room);
+    if (!result.ok) {
+      return socket.emit('actionRejected', { message: result.message, collision: false });
     }
     io.to(room.id).emit('roomState', publicRoomState(room)); // grid shape changed — full resync, not a diff
     saveRoomSoon(room);
@@ -547,19 +600,10 @@ io.on('connection', (socket) => {
   // Tool radius upgrade: 0 (1x1, unchanged) -> 1 (3x3) -> 2 (5x5), applies to
   // till/water/harvest only (see RADIUS_ACTIONS / applyAction).
   socket.on('upgradeTool', () => {
-    const newTier = nextToolTier(room.toolTier);
-    if (newTier === null) {
-      return socket.emit('actionRejected', { message: 'Tool is already at max tier.', collision: false });
+    const result = upgradeToolOnRoom(room);
+    if (!result.ok) {
+      return socket.emit('actionRejected', { message: result.message, collision: false });
     }
-    const cost = TOOL_UPGRADE_COST[room.toolTier];
-    if (room.wallet < cost) {
-      return socket.emit('actionRejected', {
-        message: `Not enough gold to upgrade (need ${cost}g, have ${room.wallet}g).`,
-        collision: false,
-      });
-    }
-    room.wallet -= cost;
-    room.toolTier = newTier;
     io.to(room.id).emit('economyUpdate', { wallet: room.wallet, inventory: room.inventory });
     io.to(room.id).emit('toolTierUpdated', { toolTier: room.toolTier, upgradeCost: TOOL_UPGRADE_COST[room.toolTier] ?? null });
     saveRoomSoon(room);
@@ -570,21 +614,10 @@ io.on('connection', (socket) => {
   // expandPlot/upgradeTool above) — a repeat buy on an already-owned id is
   // rejected rather than silently re-charging.
   socket.on('buyCosmetic', ({ id } = {}) => {
-    const item = COSMETICS[id];
-    if (!item) {
-      return socket.emit('actionRejected', { message: 'Unknown cosmetic item.', collision: false });
+    const result = buyCosmeticOnRoom(room, id);
+    if (!result.ok) {
+      return socket.emit('actionRejected', { message: result.message, collision: false });
     }
-    if (room.cosmetics[id]) {
-      return socket.emit('actionRejected', { message: `${item.label} already purchased.`, collision: false });
-    }
-    if (room.wallet < item.cost) {
-      return socket.emit('actionRejected', {
-        message: `Not enough gold for ${item.label} (need ${item.cost}g, have ${room.wallet}g).`,
-        collision: false,
-      });
-    }
-    room.wallet -= item.cost;
-    room.cosmetics[id] = true;
     io.to(room.id).emit('economyUpdate', { wallet: room.wallet, inventory: room.inventory });
     io.to(room.id).emit('cosmeticsUpdated', { cosmetics: room.cosmetics });
     saveRoomSoon(room);
@@ -594,15 +627,16 @@ io.on('connection', (socket) => {
   // whole shared inventory to gold at once; no per-crop selection since
   // there's nothing to choose between yet (one crop type).
   socket.on('sell', () => {
-    const count = room.inventory[CROP_TYPE] ?? 0;
-    if (count <= 0) {
-      socket.emit('actionRejected', { message: 'Nothing to sell yet.', collision: false });
+    const result = sellOnRoom(room);
+    if (!result.ok) {
+      socket.emit('actionRejected', { message: result.message, collision: false });
       return;
     }
-    const earned = count * SELL_PRICE;
-    room.inventory[CROP_TYPE] = 0;
-    room.wallet += earned;
-    io.to(room.id).emit('economyUpdate', { wallet: room.wallet, inventory: room.inventory, lastSale: { count, earned } });
+    io.to(room.id).emit('economyUpdate', {
+      wallet: room.wallet,
+      inventory: room.inventory,
+      lastSale: { count: result.count, earned: result.earned },
+    });
     saveRoomSoon(room);
   });
 
@@ -613,8 +647,15 @@ io.on('connection', (socket) => {
   });
 });
 
-setInterval(() => growthTick(io), GROWTH_TICK_MS);
+// Auto-start (growth tick loop + HTTP listen) is skipped under NODE_ENV=test
+// so test files can `import` this module — which wires up app/server/io as a
+// side effect of module load — without also binding a real port or leaving a
+// 1s interval running past the test run. Tests that need a live socket
+// connection call `server.listen(0, ...)` themselves for an ephemeral port.
+if (process.env.NODE_ENV !== 'test') {
+  setInterval(() => growthTick(io), GROWTH_TICK_MS);
 
-server.listen(PORT, () => {
-  console.log(`Harvest Hollow server listening on http://localhost:${PORT}`);
-});
+  server.listen(PORT, () => {
+    console.log(`Harvest Hollow server listening on http://localhost:${PORT}`);
+  });
+}

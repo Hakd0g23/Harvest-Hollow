@@ -1,0 +1,317 @@
+
+> harvest-hollow@0.1.0 test
+> npm test --prefix server
+
+
+> harvest-hollow-server@0.1.0 test
+> NODE_ENV=test node --test
+
+TAP version 13
+# Subtest: connection + room join
+    # Subtest: rejects a malformed room code with invalidRoom and disconnects
+    ok 1 - rejects a malformed room code with invalidRoom and disconnects
+      ---
+      duration_ms: 22.536709
+      type: 'test'
+      ...
+# [join] Farmer 1 (0_UoKYGDXwCxf6lhAAAD) -> room it-dr4h2s6gssu (1/6)
+    # Subtest: a valid room code gets a roomState with starting defaults
+    ok 2 - a valid room code gets a roomState with starting defaults
+      ---
+      duration_ms: 4.150625
+      type: 'test'
+      ...
+    1..2
+ok 1 - connection + room join
+  ---
+  duration_ms: 27.953084
+  type: 'suite'
+  ...
+# [leave] Farmer 1 (0_UoKYGDXwCxf6lhAAAD) (0/6)
+# [join] Farmer 1 (gwkFUF5CHAjiyVlCAAAF) -> room it-pv989rtp8se (1/6)
+# Subtest: authoritative player position sync
+    # Subtest: an accepted action broadcasts playerMoved with the acted tile coords
+    ok 1 - an accepted action broadcasts playerMoved with the acted tile coords
+      ---
+      duration_ms: 3.822541
+      type: 'test'
+      ...
+# [leave] Farmer 1 (gwkFUF5CHAjiyVlCAAAF) (0/6)
+# [join] Farmer 1 (EEraEju8OFa6s0lQAAAH) -> room it-dpll1vhc94 (1/6)
+# [join] Farmer 2 (Kz8iQLE3fYgp9429AAAJ) -> room it-dpll1vhc94 (2/6)
+    # Subtest: a second player sees the first player's playerMoved broadcast
+    ok 2 - a second player sees the first player's playerMoved broadcast
+      ---
+      duration_ms: 4.487042
+      type: 'test'
+      ...
+# [leave] Farmer 1 (EEraEju8OFa6s0lQAAAH) (1/6)
+# [leave] Farmer 2 (Kz8iQLE3fYgp9429AAAJ) (0/6)
+# [join] Farmer 1 (Cs0uW-J3ioFki6unAAAL) -> room it-mnbuvsz6im8 (1/6)
+    # Subtest: a rejected action does not move the player
+    ok 3 - a rejected action does not move the player
+      ---
+      duration_ms: 53.772292
+      type: 'test'
+      ...
+    1..3
+ok 2 - authoritative player position sync
+  ---
+  duration_ms: 62.281167
+  type: 'suite'
+  ...
+# [leave] Farmer 1 (Cs0uW-J3ioFki6unAAAL) (0/6)
+# [join] Farmer 1 (3DJ1d1mETS_qE9VMAAAN) -> room it-z2a9d2hfqfg (1/6)
+# Subtest: expandPlot re-keying over the wire
+    # Subtest: expanding re-syncs full roomState with the new grid size
+    ok 1 - expanding re-syncs full roomState with the new grid size
+      ---
+      duration_ms: 3.174833
+      type: 'test'
+      ...
+    1..1
+ok 3 - expandPlot re-keying over the wire
+  ---
+  duration_ms: 3.596958
+  type: 'suite'
+  ...
+# [leave] Farmer 1 (3DJ1d1mETS_qE9VMAAAN) (0/6)
+# [join] Farmer 1 (HecgL9Jtq7674uYvAAAP) -> room it-rbst638s5mj (1/6)
+# Subtest: cosmetic gold sink over the wire
+    # Subtest: buying an unknown cosmetic id is rejected
+    ok 1 - buying an unknown cosmetic id is rejected
+      ---
+      duration_ms: 3.278417
+      type: 'test'
+      ...
+# [leave] Farmer 1 (HecgL9Jtq7674uYvAAAP) (0/6)
+# [join] Farmer 1 (ldy56xqb4ffR_nxIAAAR) -> room it-zjra7q0ht98 (1/6)
+    # Subtest: a valid purchase deducts gold and broadcasts cosmeticsUpdated
+    ok 2 - a valid purchase deducts gold and broadcasts cosmeticsUpdated
+      ---
+      duration_ms: 5.158625
+      type: 'test'
+      ...
+# [leave] Farmer 1 (ldy56xqb4ffR_nxIAAAR) (0/6)
+# [join] Farmer 1 (AzD1Ja7GMDlWfdCoAAAT) -> room it-giudk45450t (1/6)
+# [leave] Farmer 1 (AzD1Ja7GMDlWfdCoAAAT) (0/6)
+    # Subtest: buying the same cosmetic twice rejects the second purchase
+    ok 3 - buying the same cosmetic twice rejects the second purchase
+      ---
+      duration_ms: 2.547542
+      type: 'test'
+      ...
+    1..3
+ok 4 - cosmetic gold sink over the wire
+  ---
+  duration_ms: 11.469792
+  type: 'suite'
+  ...
+# Subtest: tile action lifecycle
+    # Subtest: till -> plant -> water -> harvest happy path
+    ok 1 - till -> plant -> water -> harvest happy path
+      ---
+      duration_ms: 0.701708
+      type: 'test'
+      ...
+    # Subtest: rejects out-of-order transitions
+    ok 2 - rejects out-of-order transitions
+      ---
+      duration_ms: 0.197208
+      type: 'test'
+      ...
+    # Subtest: rejects actions on out-of-bounds tiles
+    ok 3 - rejects actions on out-of-bounds tiles
+      ---
+      duration_ms: 0.150292
+      type: 'test'
+      ...
+    # Subtest: plant is rejected when wallet cannot cover seed cost
+    ok 4 - plant is rejected when wallet cannot cover seed cost
+      ---
+      duration_ms: 0.100125
+      type: 'test'
+      ...
+    # Subtest: tool-radius upgrade applies action to the full Chebyshev neighborhood
+    ok 5 - tool-radius upgrade applies action to the full Chebyshev neighborhood
+      ---
+      duration_ms: 0.172209
+      type: 'test'
+      ...
+    # Subtest: tool-radius water only advances tiles that are actually planted
+    ok 6 - tool-radius water only advances tiles that are actually planted
+      ---
+      duration_ms: 0.148458
+      type: 'test'
+      ...
+    1..6
+ok 5 - tile action lifecycle
+  ---
+  duration_ms: 2.0685
+  type: 'suite'
+  ...
+# Subtest: growth tick
+    # Subtest: promotes watered tiles past GROWTH_MS to grown and broadcasts the change
+    ok 1 - promotes watered tiles past GROWTH_MS to grown and broadcasts the change
+      ---
+      duration_ms: 0.40225
+      type: 'test'
+      ...
+    # Subtest: wilts unwatered planted tiles past WILT_MS back to tilled, losing the seed
+    ok 2 - wilts unwatered planted tiles past WILT_MS back to tilled, losing the seed
+      ---
+      duration_ms: 0.274708
+      type: 'test'
+      ...
+    # Subtest: leaves tiles under their timer threshold untouched
+    ok 3 - leaves tiles under their timer threshold untouched
+      ---
+      duration_ms: 0.269375
+      type: 'test'
+      ...
+    1..3
+ok 6 - growth tick
+  ---
+  duration_ms: 1.260333
+  type: 'suite'
+  ...
+# Subtest: economy: sell
+    # Subtest: sells full inventory at SELL_PRICE and zeroes it
+    ok 1 - sells full inventory at SELL_PRICE and zeroes it
+      ---
+      duration_ms: 0.132125
+      type: 'test'
+      ...
+    # Subtest: rejects selling an empty inventory
+    ok 2 - rejects selling an empty inventory
+      ---
+      duration_ms: 0.079583
+      type: 'test'
+      ...
+    1..2
+ok 7 - economy: sell
+  ---
+  duration_ms: 0.258292
+  type: 'suite'
+  ...
+# Subtest: progression: upgradeTool
+    # Subtest: upgrades tier when affordable and deducts cost
+    ok 1 - upgrades tier when affordable and deducts cost
+      ---
+      duration_ms: 0.096792
+      type: 'test'
+      ...
+    # Subtest: rejects when wallet cannot cover the upgrade
+    ok 2 - rejects when wallet cannot cover the upgrade
+      ---
+      duration_ms: 0.079083
+      type: 'test'
+      ...
+    # Subtest: rejects upgrading past the max tier
+    ok 3 - rejects upgrading past the max tier
+      ---
+      duration_ms: 0.0635
+      type: 'test'
+      ...
+    1..3
+ok 8 - progression: upgradeTool
+  ---
+  duration_ms: 0.280125
+  type: 'suite'
+  ...
+# Subtest: progression: expandPlot re-keying
+    # Subtest: grows the grid and re-keys existing tile + player positions
+    ok 1 - grows the grid and re-keys existing tile + player positions
+      ---
+      duration_ms: 0.264584
+      type: 'test'
+      ...
+    # Subtest: does not re-key a player with null position (never acted yet)
+    ok 2 - does not re-key a player with null position (never acted yet)
+      ---
+      duration_ms: 0.076792
+      type: 'test'
+      ...
+    # Subtest: rejects expansion when wallet cannot cover the cost
+    ok 3 - rejects expansion when wallet cannot cover the cost
+      ---
+      duration_ms: 0.098792
+      type: 'test'
+      ...
+    # Subtest: rejects expansion past the max grid tier
+    ok 4 - rejects expansion past the max grid tier
+      ---
+      duration_ms: 0.073542
+      type: 'test'
+      ...
+    1..4
+ok 9 - progression: expandPlot re-keying
+  ---
+  duration_ms: 0.617916
+  type: 'suite'
+  ...
+# Subtest: cosmetic gold sink: buyCosmetic
+    # Subtest: rejects an unknown cosmetic id
+    ok 1 - rejects an unknown cosmetic id
+      ---
+      duration_ms: 0.09825
+      type: 'test'
+      ...
+    # Subtest: rejects buying an already-owned cosmetic
+    ok 2 - rejects buying an already-owned cosmetic
+      ---
+      duration_ms: 0.064709
+      type: 'test'
+      ...
+    # Subtest: rejects when wallet cannot cover the cosmetic cost
+    ok 3 - rejects when wallet cannot cover the cosmetic cost
+      ---
+      duration_ms: 0.072667
+      type: 'test'
+      ...
+    # Subtest: deducts gold and marks the cosmetic owned on a valid purchase
+    ok 4 - deducts gold and marks the cosmetic owned on a valid purchase
+      ---
+      duration_ms: 0.05175
+      type: 'test'
+      ...
+    # Subtest: every cosmetic in the catalog can be purchased independently
+    ok 5 - every cosmetic in the catalog can be purchased independently
+      ---
+      duration_ms: 0.065041
+      type: 'test'
+      ...
+    1..5
+ok 10 - cosmetic gold sink: buyCosmetic
+  ---
+  duration_ms: 0.402958
+  type: 'suite'
+  ...
+# Subtest: room creation defaults
+    # Subtest: a fresh room starts with defaults from spec
+    ok 1 - a fresh room starts with defaults from spec
+      ---
+      duration_ms: 0.320916
+      type: 'test'
+      ...
+    # Subtest: publicRoomState exposes the cosmetic catalog and current costs
+    ok 2 - publicRoomState exposes the cosmetic catalog and current costs
+      ---
+      duration_ms: 0.0785
+      type: 'test'
+      ...
+    1..2
+ok 11 - room creation defaults
+  ---
+  duration_ms: 0.432583
+  type: 'suite'
+  ...
+1..11
+# tests 34
+# suites 11
+# pass 34
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 310.8345
