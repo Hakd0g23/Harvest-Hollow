@@ -30,8 +30,11 @@ jobs:
       - name: Assemble Pages site (client + assets)
         run: |
           mkdir -p _site
-          cp -R client/. _site/
-          cp -R assets _site/assets
+          # client/assets is a symlink to ../assets — dereference it (-L) so
+          # the real asset files land in _site instead of a broken symlink.
+          # Excludes dev-only files (node_modules, package*.json) that have
+          # no business in a shipped static site.
+          rsync -aL --exclude node_modules --exclude 'package*.json' client/. _site/
 
       - uses: actions/upload-pages-artifact@v3
         with:
