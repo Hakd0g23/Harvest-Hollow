@@ -14,6 +14,7 @@
 import * as THREE from 'three';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { io } from 'https://cdn.socket.io/4.8.1/socket.io.esm.min.js';
 
 // Hostname-aware server URL: localhost dev talks to the local server on
@@ -31,6 +32,8 @@ let activeTool = 'till';
 const statusEl = document.getElementById('status');
 const economyEl = document.getElementById('economy');
 const sellBtn = document.getElementById('sell-btn');
+const expandBtn = document.getElementById('expand-btn');
+const upgradeBtn = document.getElementById('upgrade-btn');
 const toastEl = document.getElementById('toast');
 let toastTimer = null;
 function showToast(message, variant = 'error') {
@@ -48,6 +51,79 @@ function renderEconomy(wallet, inventory) {
 }
 
 sellBtn.addEventListener('click', () => socket.emit('sell'));
+expandBtn.addEventListener('click', () => socket.emit('expandPlot'));
+upgradeBtn.addEventListener('click', () => socket.emit('upgradeTool'));
+
+// --- Onboarding: one-time first-visit primer + reachable-anytime help ---
+// Kept to a single dismissible card (no build step, no bundler here) rather
+// than a multi-step wizard — real teaching happens in-world via the tool
+// buttons and the pulsing hint ring on an empty tile (see markFirstHintTile
+// below), following "prime, then let the mechanic teach itself" over an
+// info-dump. Seen-state lives in localStorage so it survives refresh but is
+// per-browser, not per-account (there are no accounts).
+const ONBOARDING_SEEN_KEY = 'hh_onboarding_seen_v1';
+const onboardingOverlay = document.getElementById('onboarding-overlay');
+const inviteBtn = document.getElementById('invite-btn');
+const helpBtn = document.getElementById('help-btn');
+const onboardCopyLinkBtn = document.getElementById('onboard-copy-link');
+const onboardDismissBtn = document.getElementById('onboard-dismiss');
+
+function copyInviteLink(sourceBtn) {
+  const url = window.location.href;
+  const done = () => showToast('Invite link copied!', 'success');
+  const fail = () => showToast(`Copy this link to invite: ${url}`, 'error');
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(url).then(done).catch(fail);
+  } else {
+    fail(); // no Clipboard API (very old browser / insecure context) — surface the link via toast instead of failing silently
+  }
+}
+
+function openOnboarding() {
+  onboardingOverlay.classList.add('visible');
+  onboardDismissBtn.focus();
+}
+
+function closeOnboarding() {
+  onboardingOverlay.classList.remove('visible');
+  localStorage.setItem(ONBOARDING_SEEN_KEY, '1');
+  helpBtn.focus();
+}
+
+inviteBtn.addEventListener('click', () => copyInviteLink(inviteBtn));
+onboardCopyLinkBtn.addEventListener('click', () => copyInviteLink(onboardCopyLinkBtn));
+helpBtn.addEventListener('click', openOnboarding);
+onboardDismissBtn.addEventListener('click', closeOnboarding);
+onboardingOverlay.addEventListener('click', (e) => {
+  if (e.target === onboardingOverlay) closeOnboarding(); // click-outside-card dismisses, same as Escape
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && onboardingOverlay.classList.contains('visible')) closeOnboarding();
+});
+
+// Progression buy buttons: hidden entirely at max tier (nothing left to
+// buy), otherwise show "Label (cost g)" and disabled if the wallet can't
+// afford it yet — gates the buy without needing a separate error round-trip
+// for the common "not enough gold yet" case.
+function renderExpandButton(gridSize, expandCost, wallet) {
+  if (expandCost == null) {
+    expandBtn.style.display = 'none';
+    return;
+  }
+  expandBtn.style.display = '';
+  expandBtn.textContent = `Expand Plot (${expandCost}g)`;
+  expandBtn.disabled = wallet < expandCost;
+}
+
+function renderUpgradeButton(toolTier, upgradeCost, wallet) {
+  if (upgradeCost == null) {
+    upgradeBtn.style.display = 'none';
+    return;
+  }
+  upgradeBtn.style.display = '';
+  upgradeBtn.textContent = `Upgrade Tool (${upgradeCost}g)`;
+  upgradeBtn.disabled = wallet < upgradeCost;
+}
 
 document.querySelectorAll('.tool-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
@@ -131,12 +207,32 @@ manifestPromise.catch((err) => console.error('[assets] failed to load assets.jso
 
 const modelPromiseCache = new Map(); // logical name -> Promise<THREE.Group> (template; clone before use)
 
+// Player avatars (Quaternius Ultimate Modular Men Pack) ship as single
+// self-contained .gltf files (embedded buffers/textures, no separate .mtl),
+// so they route through GLTFLoader instead of the OBJ/MTL pair every other
+// pack in this manifest uses — `entry.gltf` vs `entry.obj`/`entry.mtl`
+// distinguishes which loader a manifest entry needs.
+const gltfLoader = new GLTFLoader();
+
 async function loadModel(name) {
   if (modelPromiseCache.has(name)) return modelPromiseCache.get(name);
   const promise = (async () => {
     await manifestPromise; // ensure assetManifest is populated before lookup
     const entry = assetManifest[name];
     if (!entry) throw new Error(`No assets.json entry for "${name}"`);
+
+    if (entry.gltf) {
+      return new Promise((resolve, reject) => {
+        gltfLoader.setPath(ASSETS_BASE);
+        gltfLoader.load(
+          entry.gltf,
+          (gltf) => resolve(gltf.scene),
+          undefined,
+          reject
+        );
+      });
+    }
+
     return new Promise((resolve, reject) => {
       const mtlLoader = new MTLLoader();
       mtlLoader.setPath(ASSETS_BASE);
@@ -230,6 +326,18 @@ function applyTile(tile) {
   if (!entry) return;
   entry.soilMesh.material.color.setHex(STAGE_COLOR[tile.stage] ?? STAGE_COLOR.empty);
 
+  // A co-op partner acting on the hint tile before the local player does is
+  // itself the teaching moment ("oh, that's how it works") — clear the hint
+  // the same way a local click would instead of leaving a stale ring.
+  if (tile.x === 0 && tile.y === 0 && tile.stage !== 'empty') clearFirstActionHint();
+
+  // Only spawn/place an avatar for players still actually connected — a
+  // save file's tiles can carry `lastActionBy` ids from a previous session
+  // that already disconnected, and those shouldn't leave a ghost avatar.
+  if (tile.lastActionBy && knownPlayerIds.has(tile.lastActionBy)) {
+    spawnAvatarForPlayer(tile.lastActionBy).then(() => placeAvatarOnTile(tile.lastActionBy, tile.x, tile.y));
+  }
+
   if (entry.cropMesh) {
     tileGroup.remove(entry.cropMesh);
     entry.cropMesh = null;
@@ -280,6 +388,97 @@ function flashTile(x, y) {
   requestAnimationFrame(fade);
 }
 
+// --- Player avatars (Quaternius Ultimate Modular Men Pack) ---
+// The server doesn't track a live per-player world position (checked
+// server/server.js — players are only { id, name }, and tiles only carry
+// `lastActionBy`, the socket.id of whoever last changed that tile). Rather
+// than adding server-side position tracking (out of this pass's scope —
+// that's a server/game-logic change, not an asset-wiring one), each
+// player's avatar is placed on whichever tile they most recently acted on,
+// derived client-side from `lastActionBy` on every tilesUpdated/roomState
+// tile. This is a reasonable proxy for "where is that player working" in a
+// shared-plot co-op game and needs zero server changes — if a truer live
+// cursor position is wanted later, the server needs a `cursorMoved` event
+// and a per-player {x,y}, which is a game-engineer task, not an asset one.
+const AVATAR_MODEL_NAMES = ['player_avatar_1', 'player_avatar_2'];
+const avatarGroup = new THREE.Group();
+scene.add(avatarGroup);
+
+const knownPlayerIds = new Set(); // socket.ids currently connected to this room, per roomState/playerJoined/playerLeft
+const playerAvatars = new Map(); // socket.id -> { object3D, mixer, modelName }
+const mixers = []; // flat list of active AnimationMixers, updated every frame
+let nextAvatarModelIndex = 0;
+
+// Player avatars are skinned meshes (bone hierarchy + skin weights); a
+// plain Object3D.clone(true) does NOT correctly rebind SkinnedMesh bones to
+// their cloned skeleton (a well-known Three.js gotcha), unlike the static
+// prop/crop models above which are safe to clone from a cached template.
+// Since there are at most a handful of simultaneous players, loading a
+// fresh GLTFLoader instance per avatar (no template-cloning) sidesteps the
+// bug entirely and isn't a meaningful perf cost at this scale.
+function loadFreshGltfScene(modelName) {
+  return new Promise(async (resolve, reject) => {
+    await manifestPromise;
+    const entry = assetManifest[modelName];
+    if (!entry?.gltf) return reject(new Error(`No gltf entry for "${modelName}"`));
+    const loader = new GLTFLoader();
+    loader.setPath(ASSETS_BASE);
+    loader.load(entry.gltf, resolve, undefined, reject);
+  });
+}
+
+async function spawnAvatarForPlayer(playerId) {
+  if (playerAvatars.has(playerId)) return;
+  const modelName = AVATAR_MODEL_NAMES[nextAvatarModelIndex % AVATAR_MODEL_NAMES.length];
+  nextAvatarModelIndex += 1;
+  // Reserve the slot immediately (before the async load resolves) so a fast
+  // playerLeft during load doesn't race a second spawn for the same id.
+  playerAvatars.set(playerId, null);
+  try {
+    const gltf = await loadFreshGltfScene(modelName);
+    if (!playerAvatars.has(playerId)) return; // player already left mid-load
+    const object3D = gltf.scene;
+    const groundY = normalizeToSize(object3D, 0.9); // ~farm-animal scale; reads clearly top-down
+    object3D.position.set(0, groundY, 0); // parked at origin until a tile action places it
+    object3D.visible = false; // hidden until we know a real tile to place it on
+
+    let mixer = null;
+    const idleClip = gltf.animations.find((c) => c.name === 'Idle');
+    if (idleClip) {
+      mixer = new THREE.AnimationMixer(object3D);
+      mixer.clipAction(idleClip).play();
+      mixers.push(mixer);
+    }
+
+    avatarGroup.add(object3D);
+    playerAvatars.set(playerId, { object3D, mixer, modelName });
+  } catch (err) {
+    console.error(`[assets] failed to load player avatar "${modelName}"`, err);
+    playerAvatars.delete(playerId);
+  }
+}
+
+function removeAvatarForPlayer(playerId) {
+  const avatar = playerAvatars.get(playerId);
+  if (avatar?.object3D) {
+    avatarGroup.remove(avatar.object3D);
+    if (avatar.mixer) {
+      const idx = mixers.indexOf(avatar.mixer);
+      if (idx !== -1) mixers.splice(idx, 1);
+    }
+  }
+  playerAvatars.delete(playerId);
+}
+
+function placeAvatarOnTile(playerId, x, y) {
+  const avatar = playerAvatars.get(playerId);
+  if (!avatar?.object3D) return; // still loading, or never spawned (e.g. self before roomState)
+  const [wx, wz] = worldPos(x, y);
+  avatar.object3D.position.x = wx;
+  avatar.object3D.position.z = wz;
+  avatar.object3D.visible = true;
+}
+
 // --- Static scene dressing (barn + fence line), loaded once real state arrives ---
 let staticPropsAdded = false;
 async function addStaticProps() {
@@ -313,6 +512,41 @@ async function addStaticProps() {
   }
 }
 
+// --- Skill-gate hint: a pulsing ring over one empty tile until the player's
+// first action, teaching "tap a tile" by pointing at it rather than telling
+// them (Prime/Teach/Observe over dialogue). Shape + motion carry the signal
+// (a bobbing torus outline), not color alone, so it's legible for colorblind
+// players and still visible against any soil color. Skipped entirely once
+// the player has ever acted (localStorage flag), including returning
+// visitors and the second/third co-op joiner who's watching someone else's
+// farm that's already past tile zero.
+const FIRST_ACTION_TAKEN_KEY = 'hh_first_action_taken_v1';
+let hintRing = null;
+let hintRingStart = 0;
+
+function showFirstActionHint() {
+  if (localStorage.getItem(FIRST_ACTION_TAKEN_KEY)) return;
+  if (hintRing || tileGroup.children.length === 0) return;
+  const [wx, wz] = worldPos(0, 0);
+  const geo = new THREE.TorusGeometry(0.32, 0.05, 8, 24);
+  const mat = new THREE.MeshBasicMaterial({ color: 0xf7e8b0 });
+  hintRing = new THREE.Mesh(geo, mat);
+  hintRing.rotation.x = -Math.PI / 2;
+  hintRing.position.set(wx, 0.5, wz);
+  hintRingStart = performance.now();
+  scene.add(hintRing);
+}
+
+function clearFirstActionHint() {
+  if (!localStorage.getItem(FIRST_ACTION_TAKEN_KEY)) {
+    localStorage.setItem(FIRST_ACTION_TAKEN_KEY, '1');
+  }
+  if (hintRing) {
+    scene.remove(hintRing);
+    hintRing = null;
+  }
+}
+
 // --- Raycasting / tap-to-act (mouse click and touch tap share one handler) ---
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
@@ -324,23 +558,19 @@ const pointer = new THREE.Vector2();
 renderer.domElement.style.touchAction = 'none';
 
 function actOnScreenPoint(clientX, clientY) {
+  // Grid doesn't exist yet if roomState hasn't arrived (cold-start wake can
+  // take 30-60s) — bail out instead of touching tileGroup.children[0].
+  if (tileGroup.children.length === 0) return;
   const rect = renderer.domElement.getBoundingClientRect();
   pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
-  console.log('[debug] pointer', pointer.x, pointer.y, 'tileGroup children', tileGroup.children.length, 'camera', camera.left, camera.right, camera.top, camera.bottom);
-  console.log('[debug] camera pos', camera.position.toArray(), 'ray origin', raycaster.ray.origin.toArray(), 'ray dir', raycaster.ray.direction.toArray());
-  const t0 = tileGroup.children[0];
-  const wp = new THREE.Vector3();
-  t0.getWorldPosition(wp);
-  console.log('[debug] tile0 world pos', wp.toArray(), 'visible', t0.visible);
   const hits = raycaster.intersectObjects(tileGroup.children, false);
   const hit = hits.find((h) => h.object.userData && typeof h.object.userData.x === 'number');
-  console.log('[debug] actOnScreenPoint hits:', hits.length, 'hit:', hit && hit.object.userData);
   if (!hit) return;
   const { x, y } = hit.object.userData;
-  console.log('[debug] emitting action', activeTool, x, y);
   socket.emit('action', { type: activeTool, x, y });
+  clearFirstActionHint();
 }
 
 renderer.domElement.addEventListener('click', (event) => {
@@ -388,6 +618,16 @@ function getOrCreateRoomCode() {
 const roomCode = getOrCreateRoomCode();
 const socket = io(SERVER_URL, { query: { room: roomCode } });
 
+// Test seam: exact tile actions without screenshot-and-eyeball pixel-coord
+// raycasting (see run-harvest-hollow skill's "Coordinate-clicking is a
+// workaround" note). Client-only, no server change, harmless in production
+// (just an alternate way to fire the same 'action' emit the raycaster
+// already sends) — not gated behind a build-time flag since this project
+// has no bundler/env layer to gate it with.
+window.__hh = {
+  actOnTile: (tool, x, y) => socket.emit('action', { type: tool, x, y }),
+};
+
 socket.on('connect', () => {
   statusEl.textContent = 'connected';
 });
@@ -400,38 +640,89 @@ socket.on('roomFull', () => {
   statusEl.textContent = `room full (max ${maxPlayers} players)`;
 });
 
+// Server rejects malformed/garbage room codes rather than silently folding
+// them into the shared default room — redirect to a freshly generated valid
+// code instead. A full reload is deliberate here: it re-runs getOrCreateRoomCode
+// and reconnects cleanly with the new query param instead of juggling a live
+// socket's connection params mid-session.
+socket.on('invalidRoom', ({ suggestedRoom }) => {
+  const params = new URLSearchParams(window.location.search);
+  params.set('room', suggestedRoom);
+  window.location.replace(`${window.location.pathname}?${params}`);
+});
+
+// Cached progression state so a wallet-only economyUpdate can still re-gate
+// the buy buttons (affordability) without needing the server to resend
+// gridSize/toolTier on every gold change.
+let currentGridSize = GRID_SIZE_FALLBACK;
+let currentExpandCost = null;
+let currentToolTier = 0;
+let currentUpgradeCost = null;
+let currentWallet = 0;
+
 socket.on('roomState', (room) => {
   buildGrid(room.gridSize);
+  knownPlayerIds.clear();
+  room.players.forEach((p) => knownPlayerIds.add(p.id));
   room.tiles.forEach(applyTile);
   maxPlayers = room.maxPlayers;
   statusEl.textContent = `connected — ${room.players.length}/${maxPlayers} players`;
   renderEconomy(room.wallet, room.inventory);
+
+  currentGridSize = room.gridSize;
+  currentExpandCost = room.expandCost ?? null;
+  currentToolTier = room.toolTier ?? 0;
+  currentUpgradeCost = room.upgradeCost ?? null;
+  currentWallet = room.wallet;
+  renderExpandButton(currentGridSize, currentExpandCost, currentWallet);
+  renderUpgradeButton(currentToolTier, currentUpgradeCost, currentWallet);
+
   addStaticProps(); // no-op after first call
+
+  const overlay = document.getElementById('cold-start-overlay');
+  if (overlay) overlay.remove();
+
+  if (!localStorage.getItem(ONBOARDING_SEEN_KEY)) {
+    openOnboarding();
+  }
+  showFirstActionHint();
 });
 
 socket.on('economyUpdate', ({ wallet, inventory, lastSale }) => {
   renderEconomy(wallet, inventory);
+  currentWallet = wallet;
+  renderExpandButton(currentGridSize, currentExpandCost, currentWallet);
+  renderUpgradeButton(currentToolTier, currentUpgradeCost, currentWallet);
   if (lastSale) {
     showToast(`Sold ${lastSale.count} wheat for ${lastSale.earned}g!`, 'success');
   }
 });
 
-socket.on('playerJoined', () => {
+socket.on('toolTierUpdated', ({ toolTier, upgradeCost }) => {
+  currentToolTier = toolTier;
+  currentUpgradeCost = upgradeCost;
+  renderUpgradeButton(currentToolTier, currentUpgradeCost, currentWallet);
+  showToast(`Tool upgraded! Now affects a ${toolTier === 1 ? '3x3' : '5x5'} area.`, 'success');
+});
+
+socket.on('playerJoined', (player) => {
   statusEl.textContent = statusEl.textContent.replace(/\d+\/\d+/, (s) => {
     const n = parseInt(s, 10);
     return `${n + 1}/${maxPlayers}`;
   });
+  if (player?.id) knownPlayerIds.add(player.id);
 });
 
-socket.on('playerLeft', () => {
+socket.on('playerLeft', ({ id }) => {
   statusEl.textContent = statusEl.textContent.replace(/\d+\/\d+/, (s) => {
     const n = parseInt(s, 10);
     return `${Math.max(0, n - 1)}/${maxPlayers}`;
   });
+  knownPlayerIds.delete(id);
+  removeAvatarForPlayer(id);
 });
 
 socket.on('tilesUpdated', (tiles) => {
-  console.log('[debug] tilesUpdated', tiles);
   tiles.forEach(applyTile);
 });
 
@@ -448,8 +739,16 @@ socket.on('actionRejected', ({ message, collision, actorName, verbPast, x, y }) 
 
 // --- Render loop ---
 resize();
+const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
+  const delta = clock.getDelta();
+  mixers.forEach((mixer) => mixer.update(delta));
+  if (hintRing) {
+    const t = (performance.now() - hintRingStart) / 1000;
+    hintRing.position.y = 0.5 + Math.sin(t * 2.4) * 0.08;
+    hintRing.rotation.z = t * 1.2;
+  }
   renderer.render(scene, camera);
 }
 animate();

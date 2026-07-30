@@ -60,22 +60,25 @@ Three.js. The flow is:
    off the image. At the default 1280x720 viewport, the grid spans
    roughly x:368–910, y:110–610 (barn model occupies the top-left
    corner — avoid clicking there).
-3. The client emits `socket.emit('action', {type, x, y})`; watch
-   console for `[debug] emitting action ...` and `[debug] tilesUpdated`
-   to confirm the round trip without relying on visual diffing alone
+3. The client emits `socket.emit('action', {type, x, y})`; the
+   `[debug]` console logs previously used to confirm this round trip
+   have since been removed from the client — use the WebSocket-frame
+   approach below (or visual diffing) instead of console scraping
    (planted vs. grown crop meshes can look near-identical in a
    screenshot at this placeholder-art stage).
 
-Growth timer from watered → grown is ~20s — actually wait for it
-(`waitForTimeout(21000)` or poll), don't assume it fired.
+Growth timer from watered → grown is 75s (`GROWTH_MS` in server.js)
+— actually wait for it (`waitForTimeout(76000)` or poll), don't assume
+it fired. (An earlier version of this doc said ~20s; that was stale
+and caused a false-negative verification pass.)
 
 ### Prefer Playwright's real WebSocket API over console-log scraping
 
 The first version of this skill watched for `[debug] emitting action`
-and `[debug] tilesUpdated` strings in `page.on('console', ...)`. That
-only works because the client currently leaves those debug logs in —
-if they're ever cleaned up, the verification silently breaks. Playwright
-has a real API for this that doesn't depend on app-side debug logging:
+and `[debug] tilesUpdated` strings in `page.on('console', ...)`. Those
+debug logs have since been removed from the client, so that approach
+no longer works. Playwright has a real API for this that doesn't
+depend on app-side debug logging:
 
 ```js
 page.on('websocket', ws => {
@@ -139,7 +142,7 @@ const { chromium } = require('playwright');
   await p1.mouse.click(x, y);
   await p2.click('button:has-text("Water")');   // cross-player action on p1's tile
   await p2.mouse.click(x, y);                    // proves shared-plot sync, not just self-sync
-  await p1.waitForTimeout(21000);                // growth timer
+  await p1.waitForTimeout(76000);                // growth timer (75s, GROWTH_MS in server.js)
   await p1.click('button:has-text("Harvest")');
   await p1.mouse.click(x, y);
 

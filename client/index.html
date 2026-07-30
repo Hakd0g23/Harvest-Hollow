@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Harvest Hollow (skeleton)</title>
+<title>Harvest Hollow</title>
 <style>
   html, body {
     margin: 0;
@@ -99,6 +99,138 @@
   #sell-btn.active-hint {
     /* no-op placeholder kept minimal; sell has no "active tool" state */
   }
+  #expand-btn, #upgrade-btn {
+    background: #1e3a4a;
+    border: 1px solid #2792c9;
+    color: #cbe9f7;
+  }
+  #invite-btn, #help-btn {
+    background: #3a2c4a;
+    border: 1px solid #8a5ed6;
+    color: #e6d9f7;
+  }
+  #help-btn {
+    padding: 6px 10px;
+    font-weight: 700;
+  }
+  .tool-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .tool-btn:focus-visible,
+  #toast:focus-visible {
+    outline: 2px solid #f0e2a0;
+    outline-offset: 2px;
+  }
+
+  /* Onboarding overlay — a single-screen "Prime, Teach" card shown once on
+     first visit (gated by localStorage, see main.js), reachable again any
+     time via the "?" help button. Deliberately not a multi-step wizard: the
+     real teaching happens in-world (tool buttons + the pulsing hint ring on
+     an empty tile), this card just primes the player with the loop, the
+     invite mechanic, and the gold-sink buttons before they start. */
+  #onboarding-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 30;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(10, 12, 8, 0.72);
+    padding: 20px;
+  }
+  #onboarding-overlay.visible {
+    display: flex;
+  }
+  #onboarding-card {
+    background: #232a19;
+    border: 1px solid #4a5636;
+    border-radius: 10px;
+    max-width: 420px;
+    width: 100%;
+    max-height: 88vh;
+    overflow-y: auto;
+    padding: 20px 22px;
+    color: #eee;
+  }
+  #onboarding-card h2 {
+    margin: 0 0 12px;
+    font-size: 18px;
+    color: #d7f5b0;
+  }
+  #onboarding-card ol {
+    margin: 0 0 14px;
+    padding-left: 20px;
+    font-size: 14px;
+    line-height: 1.5;
+    color: #dce7c8;
+  }
+  #onboarding-card li {
+    margin-bottom: 8px;
+  }
+  #onboarding-card li b {
+    color: #f0e2a0;
+  }
+  #onboarding-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+  }
+  #onboarding-actions .tool-btn {
+    flex: 1 1 auto;
+    text-align: center;
+    min-height: 44px;
+  }
+  #onboard-copy-link {
+    background: #3a2c4a;
+    border: 1px solid #8a5ed6;
+    color: #e6d9f7;
+  }
+  #onboard-dismiss {
+    background: #6fae2e;
+    border-color: #9be356;
+    color: #10190a;
+    font-weight: 600;
+  }
+
+  /* Full-screen overlay shown until the first roomState event arrives.
+     The Render free-tier server can take 30-60s to wake from a cold
+     start, so a blank canvas + tiny corner text reads as broken —
+     this makes the wait legible instead. Removed in the roomState
+     handler in main.js. */
+  #cold-start-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    background: #1b1f16;
+    color: #eee;
+    font-family: system-ui, sans-serif;
+    text-align: center;
+    padding: 20px;
+  }
+  #cold-start-overlay .spinner {
+    width: 36px;
+    height: 36px;
+    border: 4px solid #4a5636;
+    border-top-color: #9be356;
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+  }
+  #cold-start-overlay p {
+    max-width: 320px;
+    font-size: 14px;
+    color: #b8c9a0;
+    margin: 0;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
 
   /* Narrow / phone-sized viewport: HUD stacks, buttons get real 44px+ tap
      targets (Apple/WCAG touch-target guidance), canvas gets breathing room
@@ -124,6 +256,12 @@
       margin-left: 0;
       text-align: right;
     }
+    #onboarding-card {
+      padding: 16px 16px;
+    }
+    #onboarding-actions .tool-btn {
+      flex: 1 1 100%;
+    }
   }
 </style>
 </head>
@@ -135,11 +273,35 @@
     <button class="tool-btn" data-tool="water">Water</button>
     <button class="tool-btn" data-tool="harvest">Harvest</button>
     <button id="sell-btn" class="tool-btn" type="button">Sell All</button>
+    <button id="expand-btn" class="tool-btn" type="button" style="display:none;">Expand Plot</button>
+    <button id="upgrade-btn" class="tool-btn" type="button" style="display:none;">Upgrade Tool</button>
+    <button id="invite-btn" class="tool-btn" type="button">Invite</button>
+    <button id="help-btn" class="tool-btn" type="button" aria-label="Show how to play">?</button>
     <span id="economy">Gold: -- | Wheat: --</span>
     <span id="status">connecting...</span>
   </div>
   <div id="canvas-wrap"></div>
-  <div id="toast"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <div id="cold-start-overlay" role="status" aria-live="polite">
+    <div class="spinner"></div>
+    <p>Waking up the farm server, this can take up to a minute...</p>
+  </div>
+
+  <div id="onboarding-overlay" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+    <div id="onboarding-card">
+      <h2 id="onboarding-title">Welcome to Harvest Hollow</h2>
+      <ol>
+        <li><b>Till, Plant, Water, Harvest</b> — pick a tool up top, then tap a tile. Cycle through all four to grow a crop.</li>
+        <li><b>Sell All</b> turns harvested wheat into gold, shared with everyone on this farm.</li>
+        <li>Spend gold on <b>Expand Plot</b> and <b>Upgrade Tool</b> as they unlock — more space, and tools that act on multiple tiles at once.</li>
+        <li>This farm is shared. Use <b>Invite</b> to copy the link and bring up to 5 friends onto the same field — everyone can till, plant, water, or harvest any tile.</li>
+      </ol>
+      <div id="onboarding-actions">
+        <button id="onboard-copy-link" class="tool-btn" type="button">Copy Invite Link</button>
+        <button id="onboard-dismiss" class="tool-btn" type="button">Got it, let's farm</button>
+      </div>
+    </div>
+  </div>
 
   <script type="importmap">
   {

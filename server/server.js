@@ -30,11 +30,14 @@ function loadRoomSave(roomId) {
     const raw = fs.readFileSync(savePath(roomId), 'utf-8');
     const saved = JSON.parse(raw);
     const result = {};
-    if (Array.isArray(saved.tiles) && saved.tiles.length === GRID_SIZE * GRID_SIZE) {
+    const gridSize = GRID_TIERS.includes(saved.gridSize) ? saved.gridSize : DEFAULT_GRID_SIZE;
+    if (Array.isArray(saved.tiles) && saved.tiles.length === gridSize * gridSize) {
       result.tiles = saved.tiles;
+      result.gridSize = gridSize;
     }
     if (typeof saved.wallet === 'number') result.wallet = saved.wallet;
     if (saved.inventory && typeof saved.inventory === 'object') result.inventory = saved.inventory;
+    if (TOOL_TIERS.includes(saved.toolTier)) result.toolTier = saved.toolTier;
     return result;
   } catch {
     // no save yet, or unreadable/stale — fall through to fresh defaults
@@ -50,7 +53,14 @@ function saveRoomSoon(room) {
   pendingSaves.add(room.id);
   setImmediate(() => {
     pendingSaves.delete(room.id);
-    const payload = JSON.stringify({ tiles: room.tiles, wallet: room.wallet, inventory: room.inventory, savedAt: Date.now() });
+    const payload = JSON.stringify({
+      tiles: room.tiles,
+      gridSize: room.gridSize,
+      wallet: room.wallet,
+      inventory: room.inventory,
+      toolTier: room.toolTier,
+      savedAt: Date.now(),
+    });
     fs.writeFile(savePath(room.id), payload, (err) => {
       if (err) console.error(`[save] failed for room ${room.id}:`, err.message);
     });
@@ -62,7 +72,18 @@ function saveRoomSoon(room) {
 // see the same grid. Not an open question; settled by the GDD.
 const DEFAULT_ROOM_ID = 'farm-1';
 const MAX_PLAYERS = 6; // solo-primary; up to 6 helpers can join the same farm
-const GRID_SIZE = 6;
+
+// --- Progression: plot expansion + tool radius upgrade (2026-07-30) ---
+// Gold-sink pass: the sell-for-gold loop previously had nothing to spend
+// gold on. Both upgrades are per-room (shared wallet), matching the
+// existing "one wallet" co-op design — not per-player purchases.
+const DEFAULT_GRID_SIZE = 6;
+const GRID_TIERS = [6, 8, 10, 12]; // +2/side per tier, capped at 12x12
+const GRID_EXPAND_COST = { 6: 240, 8: 560, 10: 1100 }; // keyed by *current* gridSize -> cost to reach next tier
+
+const TOOL_TIERS = [0, 1, 2]; // 0 = 1x1 (unchanged), 1 = 3x3, 2 = 5x5 — till/water/harvest only, not plant
+const TOOL_UPGRADE_COST = { 0: 300, 1: 900 }; // keyed by *current* toolTier -> cost to reach next tier
+const TOOL_RADIUS = { 0: 0, 1: 1, 2: 2 }; // Chebyshev radius around the clicked tile
 
 // Growth timing: real-time co-op pressure, not idle-game pacing (per GDD's
 // "who tills, who waters, who harvests" coordination pitch). 75s from
@@ -120,10 +141,11 @@ const ACTION_VERB_PAST = {
 
 function createRoom(id) {
   const save = loadRoomSave(id);
+  const gridSize = save.gridSize ?? DEFAULT_GRID_SIZE;
   const tiles = save.tiles ?? [];
   if (!save.tiles) {
-    for (let y = 0; y < GRID_SIZE; y++) {
-      for (let x = 0; x < GRID_SIZE; x++) {
+    for (let y = 0; y < gridSize; y++) {
+      for (let x = 0; x < gridSize; x++) {
         tiles.push(createTile(x, y));
       }
     }
@@ -132,6 +154,8 @@ function createRoom(id) {
     id,
     players: new Map(), // socket.id -> { id, name }
     tiles,
+    gridSize,
+    toolTier: save.toolTier ?? 0,
     wallet: save.wallet ?? STARTING_WALLET,
     inventory: save.inventory ?? { [CROP_TYPE]: 0 }, // harvested-but-unsold crops
   };
@@ -151,10 +175,22 @@ function getTile(room, x, y) {
   return room.tiles.find((t) => t.x === x && t.y === y);
 }
 
+function nextGridTier(size) {
+  const idx = GRID_TIERS.indexOf(size);
+  if (idx === -1 || idx === GRID_TIERS.length - 1) return null;
+  return GRID_TIERS[idx + 1];
+}
+
+function nextToolTier(tier) {
+  const idx = TOOL_TIERS.indexOf(tier);
+  if (idx === -1 || idx === TOOL_TIERS.length - 1) return null;
+  return TOOL_TIERS[idx + 1];
+}
+
 function publicRoomState(room) {
   return {
     id: room.id,
-    gridSize: GRID_SIZE,
+    gridSize: room.gridSize,
     maxPlayers: MAX_PLAYERS,
     players: [...room.players.values()],
     tiles: room.tiles,
@@ -162,6 +198,9 @@ function publicRoomState(room) {
     inventory: room.inventory,
     sellPrice: SELL_PRICE,
     seedCost: SEED_COST,
+    toolTier: room.toolTier,
+    expandCost: GRID_EXPAND_COST[room.gridSize] ?? null,
+    upgradeCost: TOOL_UPGRADE_COST[room.toolTier] ?? null,
   };
 }
 
@@ -190,16 +229,13 @@ function tileError(room, socket, message, tile, actionType) {
   });
 }
 
-// --- Action validation (server is source of truth) ---
-function applyAction(room, action, playerId) {
-  const { type, x, y } = action;
-  const tile = getTile(room, x, y);
-  if (!tile) return { ok: false, message: 'Tile out of bounds.' };
-
+// Single-tile stage transition for one action type. Shared by both the
+// plain (radius-0) path and the tool-radius path below so tier-0 behavior
+// (till/plant/water/harvest, one tile) is byte-for-byte unchanged.
+function applyToTile(room, tile, type, playerId) {
   function reject(message) {
     return { ok: false, message, tile };
   }
-
   function accept(extra) {
     tile.lastActionAt = Date.now();
     tile.lastActionBy = playerId;
@@ -252,6 +288,58 @@ function applyAction(room, action, playerId) {
   }
 }
 
+// Tool-radius upgrade (2026-07-30) applies to till/water/harvest only, never
+// plant (plant stays deliberately single-tile per spec — a shared wallet
+// paying for one seed at a time is the intended pacing). Tier 0 keeps the
+// exact single-tile path (and its single-object return shape) so existing
+// single-tile rejection/collision behavior is untouched; tiers 1/2 apply the
+// action to every tile in the (3x3 / 5x5) Chebyshev neighborhood
+// individually — each tile validates its own current stage, so e.g. a 3x3
+// water only actually waters the subset of those 9 tiles currently
+// `planted`, never force-advancing neighbors in the wrong stage.
+const RADIUS_ACTIONS = new Set(['till', 'water', 'harvest']);
+
+function applyAction(room, action, playerId) {
+  const { type, x, y } = action;
+  const centerTile = getTile(room, x, y);
+  if (!centerTile) return { ok: false, message: 'Tile out of bounds.' };
+
+  const radius = RADIUS_ACTIONS.has(type) ? TOOL_RADIUS[room.toolTier] ?? 0 : 0;
+
+  if (radius === 0) {
+    return applyToTile(room, centerTile, type, playerId);
+  }
+
+  // Multi-tile path: the clicked tile's own validation result still drives
+  // the accept/reject response to the clicking player (so rejection/
+  // collision toasts behave exactly as before for the tile they aimed at);
+  // neighboring tiles are best-effort and silently skipped if not eligible.
+  const centerResult = applyToTile(room, centerTile, type, playerId);
+  const changedTiles = centerResult.ok ? [centerTile] : [];
+  let economyChanged = !!centerResult.economyChanged;
+
+  for (let dy = -radius; dy <= radius; dy++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      if (dx === 0 && dy === 0) continue; // center already handled above
+      const neighbor = getTile(room, x + dx, y + dy);
+      if (!neighbor) continue; // off the edge of the grid
+      const result = applyToTile(room, neighbor, type, playerId);
+      if (result.ok) {
+        changedTiles.push(neighbor);
+        if (result.economyChanged) economyChanged = true;
+      }
+    }
+  }
+
+  return {
+    ok: centerResult.ok,
+    message: centerResult.message,
+    tile: centerTile,
+    tiles: changedTiles,
+    economyChanged,
+  };
+}
+
 // Growth tick: promote "watered" tiles past their timer to "grown", and
 // wilt "planted" tiles that sat unwatered too long back to "tilled" (loses
 // the seed) — the mechanism that gives coordination real stakes.
@@ -296,14 +384,29 @@ const io = new Server(server, {
   cors: corsOptions,
 });
 
+// Returns the sanitized room id, or null if the incoming code doesn't match
+// the allowed shape. Malformed codes used to silently fall back to
+// DEFAULT_ROOM_ID, which meant unrelated players with typo'd/garbage invite
+// links would all collide into the same shared default room. Now the caller
+// rejects the connection and tells the client to mint a fresh valid code
+// instead of guessing on the client's behalf.
 function sanitizeRoomId(raw) {
-  if (typeof raw !== 'string') return DEFAULT_ROOM_ID;
+  if (typeof raw !== 'string') return null;
   const trimmed = raw.trim().slice(0, 32);
-  return /^[a-zA-Z0-9_-]+$/.test(trimmed) ? trimmed : DEFAULT_ROOM_ID;
+  return /^[a-zA-Z0-9_-]+$/.test(trimmed) && trimmed.length > 0 ? trimmed : null;
+}
+
+function generateRoomId() {
+  return Math.random().toString(36).slice(2, 8);
 }
 
 io.on('connection', (socket) => {
   const roomId = sanitizeRoomId(socket.handshake.query.room);
+  if (!roomId) {
+    socket.emit('invalidRoom', { suggestedRoom: generateRoomId() });
+    socket.disconnect(true);
+    return;
+  }
   const room = getOrCreateRoom(roomId);
 
   if (room.players.size >= MAX_PLAYERS) {
@@ -331,10 +434,78 @@ io.on('connection', (socket) => {
     if (!result.ok) {
       return tileError(room, socket, result.message, result.tile, action.type);
     }
-    io.to(room.id).emit('tilesUpdated', [result.tile]);
+    // Multi-tile (tool-radius) actions carry the full set of tiles that
+    // actually changed on `result.tiles`; single-tile actions (till/plant at
+    // tier 0, or plant at any tier) only have `result.tile`.
+    io.to(room.id).emit('tilesUpdated', result.tiles ?? [result.tile]);
     if (result.economyChanged) {
       io.to(room.id).emit('economyUpdate', { wallet: room.wallet, inventory: room.inventory });
     }
+    saveRoomSoon(room);
+  });
+
+  // Plot expansion: grows the shared grid by 2/side per tier (6->8->10->12),
+  // capped at 12x12. Existing tiles keep their state; new tiles are added
+  // around the existing grid, keeping the previous grid centered — matches
+  // worldPos()'s ((x - offset) * step) centering on the client, so tiles
+  // that were centered before an expansion don't visually jump.
+  socket.on('expandPlot', () => {
+    const newSize = nextGridTier(room.gridSize);
+    if (newSize === null) {
+      return socket.emit('actionRejected', { message: 'Plot is already at max size.', collision: false });
+    }
+    const cost = GRID_EXPAND_COST[room.gridSize];
+    if (room.wallet < cost) {
+      return socket.emit('actionRejected', {
+        message: `Not enough gold to expand (need ${cost}g, have ${room.wallet}g).`,
+        collision: false,
+      });
+    }
+    room.wallet -= cost;
+    const oldTiles = room.tiles;
+    const oldSize = room.gridSize;
+    const grow = (newSize - oldSize) / 2; // tiles added on each side
+    const newTiles = [];
+    for (let y = 0; y < newSize; y++) {
+      for (let x = 0; x < newSize; x++) {
+        const oldX = x - grow;
+        const oldY = y - grow;
+        const existing =
+          oldX >= 0 && oldX < oldSize && oldY >= 0 && oldY < oldSize
+            ? oldTiles.find((t) => t.x === oldX && t.y === oldY)
+            : null;
+        if (existing) {
+          // Re-key to the new grid's coordinate space; state is preserved.
+          newTiles.push({ ...existing, x, y });
+        } else {
+          newTiles.push(createTile(x, y));
+        }
+      }
+    }
+    room.gridSize = newSize;
+    room.tiles = newTiles;
+    io.to(room.id).emit('roomState', publicRoomState(room)); // grid shape changed — full resync, not a diff
+    saveRoomSoon(room);
+  });
+
+  // Tool radius upgrade: 0 (1x1, unchanged) -> 1 (3x3) -> 2 (5x5), applies to
+  // till/water/harvest only (see RADIUS_ACTIONS / applyAction).
+  socket.on('upgradeTool', () => {
+    const newTier = nextToolTier(room.toolTier);
+    if (newTier === null) {
+      return socket.emit('actionRejected', { message: 'Tool is already at max tier.', collision: false });
+    }
+    const cost = TOOL_UPGRADE_COST[room.toolTier];
+    if (room.wallet < cost) {
+      return socket.emit('actionRejected', {
+        message: `Not enough gold to upgrade (need ${cost}g, have ${room.wallet}g).`,
+        collision: false,
+      });
+    }
+    room.wallet -= cost;
+    room.toolTier = newTier;
+    io.to(room.id).emit('economyUpdate', { wallet: room.wallet, inventory: room.inventory });
+    io.to(room.id).emit('toolTierUpdated', { toolTier: room.toolTier, upgradeCost: TOOL_UPGRADE_COST[room.toolTier] ?? null });
     saveRoomSoon(room);
   });
 

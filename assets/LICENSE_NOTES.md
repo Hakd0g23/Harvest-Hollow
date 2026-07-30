@@ -52,6 +52,33 @@ per-pack, since Quaternius has occasionally released packs under other terms. Re
 - 13 models: Barn, BigBarn, OpenBarn, SmallBarn, ChickenCoop, Fence, Fence2, Silo,
   Silo_House, TowerWindmill, Windmill, WaterTower, Well
 
+## Ultimate Modular Men Pack (player avatars)
+- Source: https://quaternius.com/packs/ultimatemodularcharacters.html
+- Pack title in files: "Ultimate Modular Men- Feb 2022"
+- License: CC0 1.0 Universal — confirmed via the pack page's footer link to
+  https://creativecommons.org/publicdomain/zero/1.0/ (this pack's Google Drive
+  download folder did not include its own `License.txt` at the "Individual
+  Characters/glTF" level the way other packs' zips did; re-verify against a
+  `License.txt` if you later pull additional files from the same Drive folder).
+- Local path: `assets/ultimate-modular-men-pack/glTF/`
+- Only 2 of 11 available pre-built characters were pulled (this is a subset,
+  not the full pack) — enough to give two simultaneous co-op players visually
+  distinct avatars without bloating the repo with the other 9 outfits + the
+  Blend/FBX source formats, which weren't needed:
+  - `Farmer.gltf` — used as `player_avatar_1`, thematically on-point for a farm co-op
+  - `Casual_2.gltf` — used as `player_avatar_2`, visually distinct outfit/color from Farmer
+- Format: single self-contained `.gltf` per character (buffers/textures
+  embedded as base64, no separate `.bin`/texture files) — loads directly via
+  Three.js `GLTFLoader`, no MTL step needed, unlike the OBJ packs above. Each
+  file also ships all 24 animation clips baked onto one shared rig, but the
+  client currently only uses a static pose (T-pose bind or one clip's first
+  frame) — playing an idle/walk clip is a later stretch goal, not implemented.
+- If a wider roster or gender variety is wanted later, the sibling pack
+  "Ultimate Modular Women" pack is at
+  https://quaternius.com/packs/ultimatemodularwomen.html, same CC0 terms,
+  same glTF format — not pulled in this pass since 2 avatars already covers
+  the current max simultaneous distinguishable need.
+
 ---
 
 ## Format note for Three.js

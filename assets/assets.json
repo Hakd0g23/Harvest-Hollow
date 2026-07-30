@@ -21,5 +21,12 @@
   "fence": {
     "obj": "farm-buildings-pack/OBJ/Fence.obj",
     "mtl": "farm-buildings-pack/OBJ/Fence.mtl"
+  },
+
+  "player_avatar_1": {
+    "gltf": "ultimate-modular-men-pack/glTF/Farmer.gltf"
+  },
+  "player_avatar_2": {
+    "gltf": "ultimate-modular-men-pack/glTF/Casual_2.gltf"
   }
 }
