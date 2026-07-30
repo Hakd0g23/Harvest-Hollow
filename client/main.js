@@ -129,6 +129,77 @@ cosmeticBtns.forEach((btn) => {
   });
 });
 
+// --- BGM: cozy ambient loop, intro-then-loop via Web Audio API ---
+// "Cozy Game Sound Pack" by Living VideoGame Music Composer (free, CC-equivalent
+// commercial-use-ok, no attribution required — see assets/LICENSE_NOTES.md).
+// Using raw AudioBufferSourceNodes (not an <audio> tag) specifically so the
+// intro can be scheduled to end exactly when the loop segment begins — an
+// <audio> tag's loop attribute can't stitch two separate files together
+// without an audible gap/click at the seam. The loop segment itself uses the
+// node's native .loop = true (sample-accurate repeat, no reschedule needed).
+const BGM_FILES = {
+  intro: './assets/audio/bgm_cozy1_intro.opus',
+  loop: './assets/audio/bgm_cozy1_loop.opus',
+};
+const BGM_MUTED_KEY = SFX_MUTED_KEY; // one mute toggle controls all audio (sfx + bgm) — no separate settings panel exists yet
+let bgmCtx = null;
+let bgmGain = null;
+let bgmLoopSource = null;
+let bgmStarted = false;
+
+async function loadBgmBuffer(ctx, url) {
+  const res = await fetch(url);
+  const arrayBuffer = await res.arrayBuffer();
+  return ctx.decodeAudioData(arrayBuffer);
+}
+
+async function startBgm() {
+  if (bgmStarted) return;
+  bgmStarted = true; // set immediately so overlapping trigger calls (click + keydown) can't double-start
+  try {
+    bgmCtx = new (window.AudioContext || window.webkitAudioContext)();
+    bgmGain = bgmCtx.createGain();
+    bgmGain.gain.value = sfxMuted ? 0 : 0.35; // ambient bed sits under SFX, not competing with it
+    bgmGain.connect(bgmCtx.destination);
+
+    const [introBuffer, loopBuffer] = await Promise.all([
+      loadBgmBuffer(bgmCtx, BGM_FILES.intro),
+      loadBgmBuffer(bgmCtx, BGM_FILES.loop),
+    ]);
+
+    const introSource = bgmCtx.createBufferSource();
+    introSource.buffer = introBuffer;
+    introSource.connect(bgmGain);
+
+    bgmLoopSource = bgmCtx.createBufferSource();
+    bgmLoopSource.buffer = loopBuffer;
+    bgmLoopSource.loop = true;
+    bgmLoopSource.connect(bgmGain);
+
+    const startAt = bgmCtx.currentTime;
+    introSource.start(startAt);
+    // Scheduled back-to-back on the same clock rather than chained via
+    // introSource.onended, so there's no JS-callback-latency gap at the seam.
+    bgmLoopSource.start(startAt + introBuffer.duration);
+  } catch (err) {
+    // Autoplay-policy rejection or a fetch/decode failure — either way, fail
+    // silently; BGM is ambience, not a required feature, and playSfx() above
+    // already treats sound as best-effort.
+    bgmStarted = false;
+  }
+}
+
+// Browsers require a user gesture before AudioContext can produce sound, so
+// kick BGM off the first click/keydown anywhere on the page rather than on
+// load — this also naturally covers the "join game" click.
+function bgmGestureHandler() {
+  startBgm();
+  window.removeEventListener('pointerdown', bgmGestureHandler);
+  window.removeEventListener('keydown', bgmGestureHandler);
+}
+window.addEventListener('pointerdown', bgmGestureHandler);
+window.addEventListener('keydown', bgmGestureHandler);
+
 // --- Mute toggle: simple localStorage-backed hook next to the help button ---
 const muteBtn = document.getElementById('mute-btn');
 function updateMuteButton() {
@@ -141,6 +212,9 @@ if (muteBtn) {
   muteBtn.addEventListener('click', () => {
     sfxMuted = !sfxMuted;
     localStorage.setItem(SFX_MUTED_KEY, sfxMuted ? '1' : '0');
+    if (bgmGain) {
+      bgmGain.gain.value = sfxMuted ? 0 : 0.35;
+    }
     updateMuteButton();
   });
 }
@@ -458,13 +532,43 @@ const STAGE_MODEL_SIZE = {
 const GROWTH_MS = 75_000; // watered -> grown
 const WILT_MS = 45_000; // planted -> wilts back to tilled if not watered in time
 
+// A tiling grass texture painted onto a canvas: a base green plus scattered
+// darker/lighter blotches and speckles so the ground reads as grass instead
+// of a flat color fill. Kept procedural (no new asset file) to match the
+// CanvasTexture convention already used for the status sprites below.
+function createGrassTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#3f6b2e';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const blotchColors = ['#365e27', '#487a34', '#345824', '#4d8339'];
+  for (let i = 0; i < 260; i++) {
+    ctx.fillStyle = blotchColors[i % blotchColors.length];
+    ctx.globalAlpha = 0.18 + Math.random() * 0.22;
+    const bx = Math.random() * canvas.width;
+    const by = Math.random() * canvas.height;
+    const r = 3 + Math.random() * 9;
+    ctx.beginPath();
+    ctx.ellipse(bx, by, r, r * (0.6 + Math.random() * 0.6), Math.random() * Math.PI, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(40, 40); // 200x200 plane, 5-unit tiles keeps blotches small at play-camera distance
+  return texture;
+}
+
 // A large flat ground plane beneath everything — without this the world
 // beyond the tile grid was just the scene background color showing through,
 // so the barn/fence/decor all read as floating in a flat-color void with no
 // actual ground underneath them.
 const groundMesh = new THREE.Mesh(
   new THREE.PlaneGeometry(200, 200),
-  new THREE.MeshStandardMaterial({ color: 0x3f6b2e })
+  new THREE.MeshStandardMaterial({ map: createGrassTexture(), roughness: 1 })
 );
 groundMesh.rotation.x = -Math.PI / 2;
 groundMesh.position.y = -0.2; // clear of the soil tiles' own -0.075 so it never z-fights

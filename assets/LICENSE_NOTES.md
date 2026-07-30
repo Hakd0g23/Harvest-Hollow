@@ -110,6 +110,32 @@ per-pack, since Quaternius has occasionally released packs under other terms. Re
   wiring into the till/plant/water/harvest/sell/UI action handlers is a follow-up
   task for game-debugger.
 
+## Ambient BGM
+
+- Local path: `assets/audio/` (2 files: `bgm_cozy1_intro.opus`, `bgm_cozy1_loop.opus`)
+- Pack: **"(FREE) Cozy Game Sound Pack (10 Tracks)"** by Living VideoGame Music Composer
+- Source: https://livinggameaudio.itch.io/free-cozy-game-sound-pack-1
+- License: Free, "name your own price" (downloaded at $0) — per the itch.io page and
+  the pack's included Read Me: **"Use these tracks however you please, free of charge.
+  No credit required"** (commercial use is fine; attribution is welcomed but optional,
+  not required). The Read Me also states the music itself is **not AI-generated**
+  ("I didn't use AI for the music in this pack. 100% handmade") — itch.io's page-level
+  "AI Assisted" tag on this listing refers to the cover art/graphics only, not the audio,
+  which is the only part of this pack actually used here.
+- Track used: track "1-Ab-67 BPM" (slow, warm, gentle — fits the farm/cozy mood), using
+  the pack's intro + main loop (with drums) segments out of its intro/loop/full-song set;
+  no separate tail segment was included for this particular track (the pack's Read Me
+  notes tails are only included "where possible" per song — a plain fade-out or the
+  loop simply stopping is the fallback for tracks without one, which is what's used here).
+- Format: Ogg Opus, 192kbps/44.1kHz (as shipped by the pack) — supported natively by
+  Chrome/Firefox/Edge; if broad Safari/iOS support becomes a requirement later, these
+  would need re-encoding to Ogg Vorbis or AAC, not currently done.
+- Wired into `client/main.js` (search `--- BGM ---`): intro plays once via the Web Audio
+  API scheduled back-to-back with the loop segment (avoids the audible seam gap an
+  `<audio loop>` tag would have when stitching two separate files), then the loop
+  segment repeats via native `AudioBufferSourceNode.loop`. Gated behind the existing
+  `#mute-btn` toggle (same mute state as SFX — no separate BGM volume control exists yet).
+
 ## Format note for Three.js
 
 None of these four packs ship a glTF/GLB export (Quaternius only provides Blend/FBX/OBJ for
