@@ -782,14 +782,10 @@ async function spawnAvatarForPlayer(playerId) {
       // starts on login.
       targetX: object3D.position.x,
       targetZ: object3D.position.z,
-      // "Home" is the last real (server-assigned) tile position — separate
-      // from targetX/targetZ so ambient idle wandering can nudge the avatar
-      // a little off that spot and bring it back without losing track of
-      // where it's actually supposed to be.
-      homeX: object3D.position.x,
-      homeZ: object3D.position.z,
-      wandering: false,
-      wanderTimer: 3 + Math.random() * 4,
+      // Counts down while idle (arrived, nothing queued); hitting zero picks
+      // a fresh random roam point (see randomRoamPoint()) so idle avatars
+      // wander the farm instead of standing frozen between actions.
+      wanderTimer: 2 + Math.random() * 3,
     });
   } catch (err) {
     console.error(`[assets] failed to load player avatar "${modelName}"`, err);
@@ -825,10 +821,7 @@ function placeAvatarOnTile(playerId, x, y) {
   const [wx, wz] = worldPos(x, y);
   avatar.targetX = wx;
   avatar.targetZ = wz + AVATAR_TILE_EDGE_OFFSET;
-  avatar.homeX = avatar.targetX; // real assigned spot — idle wandering nudges off this and returns to it
-  avatar.homeZ = avatar.targetZ;
-  avatar.wandering = false; // a real placement always overrides any in-progress ambient wander
-  avatar.wanderTimer = 3 + Math.random() * 4;
+  avatar.wanderTimer = 2 + Math.random() * 3; // a real destination always takes priority over idle roaming
   avatar.object3D.visible = true;
   // Every placement — including the very first one, walking in from
   // avatarSpawnOrigin() — now interpolates in the render loop below instead
@@ -851,6 +844,15 @@ function placeAvatarOnTile(playerId, x, y) {
 function gridHalfExtent() {
   const step = TILE_SIZE + TILE_GAP;
   return ((gridSize - 1) / 2) * step + TILE_SIZE / 2;
+}
+
+// A random point anywhere across the actual tile grid (not just a tiny
+// nudge near wherever the avatar last stood) — used for idle ambient
+// wandering so an unassigned avatar reads as walking around the farm
+// rather than fidgeting in one spot.
+function randomRoamPoint() {
+  const reach = gridHalfExtent() - 0.4; // stay inboard of the fence/edge
+  return [(Math.random() * 2 - 1) * reach, (Math.random() * 2 - 1) * reach];
 }
 
 const BARN_MAX_DIM = 2.2;
@@ -1138,6 +1140,13 @@ const pointer = new THREE.Vector2();
 // synthetic click via preventDefault.
 renderer.domElement.style.touchAction = 'none';
 
+// Clicks queue up rather than firing immediately: the local player's avatar
+// walks to each clicked tile in click order, and the actual server action
+// (and its SFX) only fires once the avatar physically arrives there — see
+// the queue-draining logic in animate(). A tile's action never "auto
+// starts" just because it was clicked; it starts when the avatar is on it.
+const actionQueue = []; // { x, y, type } in click order, local player only
+
 function actOnScreenPoint(clientX, clientY) {
   // Grid doesn't exist yet if roomState hasn't arrived (cold-start wake can
   // take 30-60s) — bail out instead of touching tileGroup.children[0].
@@ -1150,20 +1159,12 @@ function actOnScreenPoint(clientX, clientY) {
   const hit = hits.find((h) => h.object.userData && typeof h.object.userData.x === 'number');
   if (!hit) return;
   const { x, y } = hit.object.userData;
-  socket.emit('action', { type: activeTool, x, y });
-  playSfx(activeTool); // till/plant/water/harvest sfx keys match TOOLS values 1:1
   clearFirstActionHint();
-  // Redirect the local avatar toward the clicked tile immediately instead
-  // of waiting for the server's playerMoved echo. Without this, clicking a
-  // second tile while still mid-walk to the first only redirected once the
-  // server round-trip for the SECOND click landed — and if that action was
-  // rejected (wrong tool for that tile's stage), no playerMoved ever
-  // arrived, so the avatar looked stuck heading to tile 1 until re-clicking
-  // it "unstuck" things. Moving optimistically here means every click
-  // redirects the walk right away regardless of whether the action itself
-  // is ultimately accepted; a rejected action just means nothing changes
-  // once the avatar gets there.
-  if (socket.id) {
+  actionQueue.push({ x, y, type: activeTool });
+  // If this is the only thing queued, start walking there right away
+  // (interrupting idle wandering); otherwise it just waits its turn behind
+  // whatever's already queued — the avatar keeps finishing its current trip.
+  if (actionQueue.length === 1 && socket.id) {
     spawnAvatarForPlayer(socket.id).then(() => placeAvatarOnTile(socket.id, x, y));
   }
 }
@@ -1419,26 +1420,32 @@ function animate() {
       // queuePendingTile()/flushPendingTilesForPlayer() above.
       flushPendingTilesForPlayer(playerId);
 
-      // Ambient idle wandering: small, aimless steps around "home" (the
-      // last real assigned tile) whenever nothing else is going on, so a
-      // parked avatar reads as a living character instead of a static prop.
-      // Any real placeAvatarOnTile() call resets wandering/wanderTimer and
-      // takes priority over this the moment it happens.
-      if (!avatar.wandering) {
-        avatar.wanderTimer -= delta;
-        if (avatar.wanderTimer <= 0) {
-          const angle = Math.random() * Math.PI * 2;
-          const radius = 0.15 + Math.random() * 0.2;
-          avatar.targetX = avatar.homeX + Math.cos(angle) * radius;
-          avatar.targetZ = avatar.homeZ + Math.sin(angle) * radius;
-          avatar.wandering = true;
+      // Local player, arrived with a queued click waiting: this is the tile
+      // that click was for, so the server action (and its SFX) fires now —
+      // on arrival, not on click — then moves on to whatever's queued next.
+      if (playerId === socket.id && actionQueue.length > 0) {
+        const job = actionQueue.shift();
+        socket.emit('action', { type: job.type, x: job.x, y: job.y });
+        playSfx(job.type);
+        if (actionQueue.length > 0) {
+          const next = actionQueue[0];
+          placeAvatarOnTile(socket.id, next.x, next.y);
         }
-      } else {
-        // Arrived at the little wander spot — pause on idle, then head home.
-        avatar.targetX = avatar.homeX;
-        avatar.targetZ = avatar.homeZ;
-        avatar.wandering = false;
-        avatar.wanderTimer = 3 + Math.random() * 4;
+        return; // handled this frame — idle wandering picks back up once the queue is empty
+      }
+
+      // Ambient idle wandering: with nothing queued, avatars roam freely
+      // around the farm (a fresh random point each time, not a small nudge
+      // back to one spot) so a parked avatar reads as a living character
+      // instead of a static prop. A real placeAvatarOnTile() call (a new
+      // queued click for the local player, or another player's own action)
+      // always overrides this the moment it happens.
+      avatar.wanderTimer -= delta;
+      if (avatar.wanderTimer <= 0) {
+        const [rx, rz] = randomRoamPoint();
+        avatar.targetX = rx;
+        avatar.targetZ = rz;
+        avatar.wanderTimer = 2 + Math.random() * 3; // only rechecked once this next spot is reached
       }
     }
   });
